@@ -47,20 +47,23 @@ def mute_audio(video_file, swears):
         cmd = ['ffmpeg', '-i', video_file, '-af', f"volume=enable='between(t,{start_time},{end_time})':volume=0", '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', f'muted_{video_file}']
         subprocess.run(cmd)
 
+def main():
+    # Example usage
+    video_file = 'Schitts.Creek.S01E03.720p.WEB-DL.x265-HETeam.mkv'
+    extracted_audio_file = 'scs1e3.wav'
 
-# Example usage
-video_file = 'Schitts.Creek.S01E03.720p.WEB-DL.x265-HETeam.mkv'
-extracted_audio_file = 'scs1e3.wav'
+    # Extract audio from video
+    extract_audio(video_file, extracted_audio_file)
 
-# Extract audio from video
-extract_audio(video_file, extracted_audio_file)
+    # Transcribe audio to text and obtain timestamps
+    swears = transcribe_audio(extracted_audio_file)
 
-# Transcribe audio to text and obtain timestamps
-swears = transcribe_audio(extracted_audio_file)
+    # Mute audio at specified timestamps
+    mute_audio(video_file, swears)
 
-# Mute audio at specified timestamps
-mute_audio(video_file, swears)
+    # Combine modified audio with original video
+    #cmd = ['ffmpeg', '-i', f'muted_{extracted_audio_file}', '-i', video_file, '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', 'output_video.mp4']
+    #subprocess.run(cmd)
 
-# Combine modified audio with original video
-#cmd = ['ffmpeg', '-i', f'muted_{extracted_audio_file}', '-i', video_file, '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', 'output_video.mp4']
-#subprocess.run(cmd)
+if __name__ == "__main__":
+    main()
