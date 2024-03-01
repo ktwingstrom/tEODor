@@ -4,7 +4,7 @@ import os
 
 # Function to extract audio from video using FFmpeg
 def extract_audio(video_file, audio_file):
-    cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2', audio_file]
+    cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', 'copy', audio_file]
     subprocess.run(cmd)
 
 # Function to transcribe audio to text using SpeechRecognition
@@ -44,13 +44,25 @@ def mute_audio(video_file, swears):
         start = float(swear[1])
         end = float(swear[2])
         # Construct ffmpeg command with properly formatted timestamps and escaped quotes
-        cmd = ['ffmpeg', '-i', video_file, '-af', f"volume=enable='between(t,{start_time},{end_time})':volume=0", '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', f'muted_{video_file}']
+        cmd = ['ffmpeg', '-i', video_file, '-af', f"volume=enable='between(t,{start},{end})':volume=0", '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', f'muted_{video_file}']
         subprocess.run(cmd)
 
 def main():
-    # Example usage
-    video_file = 'Schitts.Creek.S01E03.720p.WEB-DL.x265-HETeam.mkv'
-    extracted_audio_file = 'scs1e3.wav'
+    # Get user input for the video file
+    video_file = input("Enter the video file: ")
+
+    # Convert user input to absolute path
+    video_file = os.path.abspath(video_file)
+
+    # Check if the file exists
+    if not os.path.isfile(video_file):
+        print("Error: File not found.")
+        exit()
+
+    base_name, _ = os.path.splitext(os.path.basename(video_file))
+    directory = os.path.dirname(video_file)
+    extracted_audio_file = os.path.join(directory, f"{base_name}-AUDIO.wav")
+    print(f"Video File: {video_file}, base_name: {base_name}, extracted_audio_file: {extracted_audio_file}")
 
     # Extract audio from video
     extract_audio(video_file, extracted_audio_file)
