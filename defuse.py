@@ -6,6 +6,7 @@ import os
 def extract_audio(video_file, audio_file):
     cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', 'copy', audio_file]
     subprocess.run(cmd)
+    return audio_file
 
 # Function to transcribe audio to text using SpeechRecognition
 def transcribe_audio(audio_file):
@@ -39,13 +40,13 @@ def transcribe_audio(audio_file):
     return swear_list
 
 # Function to mute audio at specified timestamps using FFmpeg
-def mute_audio(video_file, swears):
+def mute_audio(audio_file, swears):
     for swear in swears:
         print("Swear tuple:", swear)
         start = float(swear[1])
         end = float(swear[2])
         # Construct ffmpeg command with properly formatted timestamps and escaped quotes
-        cmd = ['ffmpeg', '-i', video_file, '-af', f"volume=enable='between(t,{start},{end})':volume=0", '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', f'muted_{video_file}']
+        cmd = ['ffmpeg', '-i', audio_file, '-vn', '-af', f"volume=enable='between(t,{start},{end})':volume=0", '-c:a', 'aac', '-strict', 'experimental', f'muted_{audio_file}']
         subprocess.run(cmd)
 
 def main():
@@ -72,11 +73,11 @@ def main():
     swears = transcribe_audio(extracted_audio_file)
 
     # Mute audio at specified timestamps
-    mute_audio(video_file, swears)
+    mute_audio(extracted_audio_file, swears)
 
     # Combine modified audio with original video
-    #cmd = ['ffmpeg', '-i', f'muted_{extracted_audio_file}', '-i', video_file, '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', 'output_video.mp4']
-    #subprocess.run(cmd)
+    cmd = ['ffmpeg', '-i', f'muted_{extracted_audio_file}', '-i', video_file, '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', 'output_video.mp4']
+    subprocess.run(cmd)
 
 if __name__ == "__main__":
     main()
