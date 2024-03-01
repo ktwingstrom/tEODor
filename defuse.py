@@ -14,6 +14,7 @@ def transcribe_audio(audio_file):
     # Extract transcribed text and corresponding timestamps
     transcribed_text = result["text"]
 
+    # pull segments from results
     segments = result['segments']
     
     # Instantiate empty list 
