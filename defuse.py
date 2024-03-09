@@ -1,19 +1,25 @@
 import subprocess
 import whisper
 import os
+import argparse
+import shlex
 
 # Function to extract audio from video using FFmpeg
 def extract_audio(video_file, audio_file):
-    cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2', audio_file]
-    subprocess.run(cmd)
+    print("##########\nExtracting audio from video file...\n##########")
+    cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', 'pcm_s16le', audio_file]
+    subprocess.run(cmd, text=True)
+    return audio_file
 
 # Function to transcribe audio to text using SpeechRecognition
 def transcribe_audio(audio_file):
+    "Transcribing audio into text to find F-words..."
     model = whisper.load_model("base")
     result = model.transcribe(audio_file, word_timestamps="True")
     # Extract transcribed text and corresponding timestamps
     transcribed_text = result["text"]
 
+    # pull segments from results
     segments = result['segments']
     
     # Instantiate empty list 
@@ -38,19 +44,61 @@ def transcribe_audio(audio_file):
     return swear_list
 
 # Function to mute audio at specified timestamps using FFmpeg
-def mute_audio(video_file, swears):
+def mute_audio(audio_file, swears):
+    # Initialize an empty list to store filter expressions for muting
+    filter_expressions = []
+
+    # Construct the filter expression for each swear word
+    print("##########\nIterating through swear list and muting...\n##########")
     for swear in swears:
         print("Swear tuple:", swear)
         start = float(swear[1])
         end = float(swear[2])
-        # Construct ffmpeg command with properly formatted timestamps and escaped quotes
-        cmd = ['ffmpeg', '-i', video_file, '-af', f"volume=enable='between(t,{start_time},{end_time})':volume=0", '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', f'muted_{video_file}']
-        subprocess.run(cmd)
+
+        # Define the filter expressions dynamically
+        filter_expressions.append({'start': start, 'end': end})
+
+    # Construct the filter string
+    filter_string = ', '.join(
+        f"volume=enable='between(t,{expr['start']},{expr['end']}):volume=0'"
+        for expr in filter_expressions
+    )
+
+    # Set up filename for muted file
+    base_name, _ = os.path.splitext(os.path.basename(audio_file))
+    directory = os.path.dirname(audio_file)
+    muted_audio_file = os.path.join(directory, f"{base_name}-MUTED.wav")
+
+    # Construct ffmpeg command with a complex filtergraph
+    print("##########\nMuting all F-words...\n##########")
+    print(f"Filter String: {filter_string}")
+    cmd = ['ffmpeg', '-i', audio_file, '-vn', '-af', filter_string, '-c:a', 'pcm_s16le', '-strict', 'experimental', muted_audio_file]
+    
+    # Execute the command
+    subprocess.run(cmd)
+    return muted_audio_file
+
 
 def main():
-    # Example usage
-    video_file = 'Schitts.Creek.S01E03.720p.WEB-DL.x265-HETeam.mkv'
-    extracted_audio_file = 'scs1e3.wav'
+    # Get user input for the video file
+    parser = argparse.ArgumentParser(description='Process video file and mute profanity.')
+    parser.add_argument('-i', '--input', help='Input video file', required=True)
+    args = parser.parse_args()
+
+    video_file = args.input
+
+    # Convert user input to absolute path
+    video_file = os.path.abspath(video_file)
+
+    # Check if the file exists
+    if not os.path.isfile(video_file):
+        print("##########\nError: File not found.\n##########")
+        exit()
+
+    base_name, _ = os.path.splitext(os.path.basename(video_file))
+    directory = os.path.dirname(video_file)
+    extracted_audio_file = os.path.join(directory, f"{base_name}-AUDIO-ONLY.wav")
+    print(f"##########\nVideo File: {video_file}, base_name: {base_name}, extracted_audio_file: {extracted_audio_file}\n##########")
 
     # Extract audio from video
     extract_audio(video_file, extracted_audio_file)
@@ -59,11 +107,23 @@ def main():
     swears = transcribe_audio(extracted_audio_file)
 
     # Mute audio at specified timestamps
-    mute_audio(video_file, swears)
+    muted_audio_file = mute_audio(extracted_audio_file, swears)
 
     # Combine modified audio with original video
-    #cmd = ['ffmpeg', '-i', f'muted_{extracted_audio_file}', '-i', video_file, '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', 'output_video.mp4']
-    #subprocess.run(cmd)
+    #ffmpeg -i video.mp4 -i muted-audio.aac -c:v copy -c:a aac -map 0:v:0 -map 1:a:0 output.mp4
+    directory, filename = os.path.split(video_file)
+    base_name, extension = os.path.splitext(filename)
+    # Append the desired suffix and the original extension to the base name
+    clean_video_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
+
+    print("##########\nCombining edited audio with original video file...\n##########")
+    cmd = ['ffmpeg', '-i', video_file, '-i', muted_audio_file, '-c', 'copy', '-map', '0:v:0', '-map', '1:a:0', clean_video_file]
+    subprocess.run(cmd)
+
+    # Remove intermediate audio files
+    print("##########\nRemoving intermediate files...\n##########")
+    os.remove(extracted_audio_file)
+    os.remove(muted_audio_file)
 
 if __name__ == "__main__":
     main()
