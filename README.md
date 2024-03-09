@@ -1,5 +1,5 @@
 # tEODor
-A tool for defusing F-bombs in video and audio content
+A tool for defusing (muting) F-bombs in video and audio content
 
 USAGE:
 run the defuse.py script and pass it a video file.  
