@@ -15,6 +15,6 @@ When the script runs it will extract the audio from the video file, then transcr
 
 REQUIREMENTS:
 
-openai-python (https://github.com/openai/openai-python)
+openai-whisper (https://github.com/openai/whisper)
 
 ffmpeg (https://formulae.brew.sh/formula/ffmpeg OR https://pypi.org/project/ffmpeg/)
