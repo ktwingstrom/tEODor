@@ -2,7 +2,7 @@ import subprocess
 import whisper
 import os
 import argparse
-import shlex
+import json
 
 # Function to extract audio from video using FFmpeg
 def extract_audio(video_file, audio_file):
@@ -19,6 +19,28 @@ def transcribe_audio(audio_file):
     # Extract transcribed text and corresponding timestamps
     transcribed_text = result["text"]
 
+    # Determine the filename for the transcription file
+    base_name = os.path.basename(audio_file)
+    filename, _ = os.path.splitext(base_name)
+    filename_parts = filename.split('.')
+
+    # Find the index of the first occurrence of 'S' followed by a number
+    season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
+    if season_index is not None:
+        filename_prefix = '.'.join(filename_parts[:season_index+1])
+    else:
+        filename_prefix = filename
+
+    # Write transcription to a text file for troubleshooting
+    #transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
+    #with open(transcription_file, 'w') as file:
+    #    file.write(transcribed_text)
+
+    # Write segments to a JSON file for troubleshooting
+    #segments_file = f"{filename_prefix}-SEGMENTS.json"
+    #with open(segments_file, 'w') as file:
+    #    json.dump(result['segments'], file, indent=4)
+
     # pull segments from results
     segments = result['segments']
     
@@ -34,14 +56,15 @@ def transcribe_audio(audio_file):
             # Access the 'word', 'start', and 'end' elements within each word object
             word = word_obj['word']
             start = word_obj['start']
-            end = word_obj['end']
+            end = word_obj['end'] + 0.1
 
             # Do something with the word, start, and end values
-            if "fuck" in word:
+            if "fuck" in word.lower():
                 swear_list.append((word, start, end))
                 print(f"Word: {word}, Start: {start}, End: {end}")
-    #timestamps = result["audio_time"]
+
     return swear_list
+
 
 # Function to mute audio at specified timestamps using FFmpeg
 def mute_audio(audio_file, swears):
@@ -106,8 +129,20 @@ def main():
     # Transcribe audio to text and obtain timestamps
     swears = transcribe_audio(extracted_audio_file)
 
+     # Check if no F-words were found
+    if not swears:
+        print("##########\nNo F-words found. Exiting gracefully.\n##########")
+        os.remove(extracted_audio_file)
+        exit()
+        
     # Mute audio at specified timestamps
     muted_audio_file = mute_audio(extracted_audio_file, swears)
+
+    # Compress WAV file down to AAC to preserve size of original video file
+    print("##########\nConvert wav to aac file for size\n##########")
+    aac_file = f"{os.path.splitext(muted_audio_file)[0]}.aac"
+    cmd = ['ffmpeg', '-i', muted_audio_file, '-c:a', 'aac', '-b:a', '320k', aac_file]
+    subprocess.run(cmd)
 
     # Combine modified audio with original video
     #ffmpeg -i video.mp4 -i muted-audio.aac -c:v copy -c:a aac -map 0:v:0 -map 1:a:0 output.mp4
@@ -117,13 +152,14 @@ def main():
     clean_video_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
 
     print("##########\nCombining edited audio with original video file...\n##########")
-    cmd = ['ffmpeg', '-i', video_file, '-i', muted_audio_file, '-c', 'copy', '-map', '0:v:0', '-map', '1:a:0', clean_video_file]
+    cmd = ['ffmpeg', '-i', video_file, '-i', aac_file, '-c', 'copy', '-map', '0:v:0', '-map', '1:a:0', clean_video_file]
     subprocess.run(cmd)
 
     # Remove intermediate audio files
     print("##########\nRemoving intermediate files...\n##########")
     os.remove(extracted_audio_file)
     os.remove(muted_audio_file)
+    os.remove(aac_file)
 
 if __name__ == "__main__":
     main()
