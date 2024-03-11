@@ -18,3 +18,13 @@ REQUIREMENTS:
 openai-whisper (https://github.com/openai/whisper)
 
 ffmpeg (https://formulae.brew.sh/formula/ffmpeg OR https://pypi.org/project/ffmpeg/)
+
+
+#####################
+BATCH FUNCTIONALITY #
+#####################
+
+Use defuse-all.sh -i <path to folder>
+
+This will look for all video files in the folder you specified recursively and perform the F-bomb defusion. 
+PLEASE NOTE: you'll need to update the file location of the defuse.py script that is listed in the defuse-all.sh script. 
