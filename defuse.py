@@ -143,12 +143,14 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
 
 def main():
     # Get user input for the video file
-    #parser = argparse.ArgumentParser(description='Process video file and mute profanity.')
-    #parser.add_argument('-i', '--input', help='Input video file', required=True)
-    #args = parser.parse_args()
+    parser = argparse.ArgumentParser(description='Process video file and mute profanity.')
+    parser.add_argument('-i', '--input', help='Input video file', required=True)
+    args = parser.parse_args()
 
-    #video_file = args.input
-    video_file = '/Users/kevint/Downloads/Test/Its.Always.Sunny.in.Philadelphia.S16E07.720p.WEB.x265-MiNX.eztv.re.mkv'
+    video_file = args.input
+
+    # Uncomment hardcoded video file for testing
+    #video_file = '/Users/kevint/Downloads/Test/Its.Always.Sunny.in.Philadelphia.S16E07.720p.WEB.x265-MiNX.eztv.re.mkv'
 
     # Convert user input to absolute path
     video_file = os.path.abspath(video_file)
@@ -191,5 +193,5 @@ def main():
     os.remove(defused_audio_file)
     os.remove(audio_only_file)
 
-if __name__ == "__main__":
+if __name__ == "__main__":    
     main()
