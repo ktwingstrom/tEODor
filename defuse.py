@@ -11,18 +11,32 @@ def get_audio_info(video_file):
     ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name:stream=bit_rate', '-of', 'json', video_file]
     result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print("Error: Failed to get audio codec information.")
-        return None
+        print("Error: Failed to get audio codec information, defualt to aac at 320kbps.")
+        return 'aac', '320000'
     # Parse the JSON output to get the audio codec
     try:
         codec_info = json.loads(result.stdout)
-        audio_codec = codec_info['streams'][0]['codec_name']
-        bit_rate = codec_info['streams'][0]['bit_rate']
+
+        # Try to get codec information
+        try:
+            audio_codec = codec_info['streams'][0]['codec_name']
+        except (KeyError, IndexError):
+            print("Error: Failed to parse audio codec information. Defaulting to 'aac'.")
+            audio_codec = 'aac'
+
+        # Try to get bitrate information
+        try:
+            bit_rate = codec_info['streams'][0]['bit_rate']
+        except (KeyError, IndexError):
+            print("Error: Failed to parse bitrate information. Defaulting to '320000'.")
+            bit_rate = '320000'
+
         print(f"##########\nAudio Codec & Bitrate from source:\nCodec:{audio_codec}\nBitrate:{bit_rate}\n##########")
         return audio_codec, bit_rate
-    except (json.JSONDecodeError, KeyError, IndexError):
-        print("Error: Failed to parse audio codec information.")
-        return None
+    
+    except json.JSONDecodeError:
+        print("Error: Failed to parse audio information JSON.")
+        return 'aac', '320000'
     
 def extract_audio(video_file, audio_codec, bit_rate):    
     # Use the ext that relates to the codec;
@@ -31,7 +45,7 @@ def extract_audio(video_file, audio_codec, bit_rate):
 
     # Change the extension of video_file to audio_extension
     base_name, _ = os.path.splitext(video_file)
-    audio_file = base_name + "AUDIO" + audio_extension
+    audio_file = base_name + "-AUDIO" + audio_extension
     
     # Use the determined audio codec in the ffmpeg command
     cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec, '-b:a', bit_rate, audio_file]
@@ -116,7 +130,7 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
 
     # Set up filename for muted file
     base_name, _ = os.path.splitext(audio_only_file)
-    defused_audio_file = base_name + "DEFUSED-AUDIO" + "." + audio_codec
+    defused_audio_file = base_name + "-DEFUSED-AUDIO" + "." + audio_codec
 
     # Construct ffmpeg command with a complex filtergraph
     print("##########\nMuting all F-words...\n##########")
@@ -129,11 +143,12 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
 
 def main():
     # Get user input for the video file
-    parser = argparse.ArgumentParser(description='Process video file and mute profanity.')
-    parser.add_argument('-i', '--input', help='Input video file', required=True)
-    args = parser.parse_args()
+    #parser = argparse.ArgumentParser(description='Process video file and mute profanity.')
+    #parser.add_argument('-i', '--input', help='Input video file', required=True)
+    #args = parser.parse_args()
 
-    video_file = args.input
+    #video_file = args.input
+    video_file = '/Users/kevint/Downloads/Test/Its.Always.Sunny.in.Philadelphia.S16E07.720p.WEB.x265-MiNX.eztv.re.mkv'
 
     # Convert user input to absolute path
     video_file = os.path.abspath(video_file)
