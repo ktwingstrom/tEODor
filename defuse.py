@@ -4,10 +4,37 @@ import os
 import argparse
 import json
 
-# Function to extract audio from video using FFmpeg
-def extract_audio(video_file, audio_file):
+# Function to get info from file to figure out the input codec for the audio stream
+def get_audio_info(video_file):
     print("##########\nExtracting audio from video file...\n##########")
-    cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', 'pcm_s16le', audio_file]
+    # Run ffprobe command to get information about the audio stream
+    ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name:stream=bit_rate', '-of', 'json', video_file]
+    result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("Error: Failed to get audio codec information.")
+        return None
+    # Parse the JSON output to get the audio codec
+    try:
+        codec_info = json.loads(result.stdout)
+        audio_codec = codec_info['streams'][0]['codec_name']
+        bit_rate = codec_info['streams'][0]['bit_rate']
+        print(f"##########\nAudio Codec & Bitrate from source:\nCodec:{audio_codec}\nBitrate:{bit_rate}\n##########")
+        return audio_codec, bit_rate
+    except (json.JSONDecodeError, KeyError, IndexError):
+        print("Error: Failed to parse audio codec information.")
+        return None
+    
+def extract_audio(video_file, audio_codec, bit_rate):    
+    # Use the ext that relates to the codec;
+    # Append a dot before the audio codec value to create the extension
+    audio_extension = f".{audio_codec}"
+
+    # Change the extension of video_file to audio_extension
+    base_name, _ = os.path.splitext(video_file)
+    audio_file = base_name + "AUDIO" + audio_extension
+    
+    # Use the determined audio codec in the ffmpeg command
+    cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec, '-b:a', bit_rate, audio_file]
     subprocess.run(cmd, text=True)
     return audio_file
 
@@ -24,12 +51,13 @@ def transcribe_audio(audio_file):
     filename, _ = os.path.splitext(base_name)
     filename_parts = filename.split('.')
 
+    # This section is to name the transcription and segments file. Uncomment to use. 
     # Find the index of the first occurrence of 'S' followed by a number
-    season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
-    if season_index is not None:
-        filename_prefix = '.'.join(filename_parts[:season_index+1])
-    else:
-        filename_prefix = filename
+    #season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
+    #if season_index is not None:
+    #    filename_prefix = '.'.join(filename_parts[:season_index+1])
+    #else:
+    #    filename_prefix = filename
 
     # Write transcription to a text file for troubleshooting
     #transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
@@ -65,9 +93,8 @@ def transcribe_audio(audio_file):
 
     return swear_list
 
-
 # Function to mute audio at specified timestamps using FFmpeg
-def mute_audio(audio_file, swears):
+def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
     # Initialize an empty list to store filter expressions for muting
     filter_expressions = []
 
@@ -88,19 +115,17 @@ def mute_audio(audio_file, swears):
     )
 
     # Set up filename for muted file
-    base_name, _ = os.path.splitext(os.path.basename(audio_file))
-    directory = os.path.dirname(audio_file)
-    muted_audio_file = os.path.join(directory, f"{base_name}-MUTED.wav")
+    base_name, _ = os.path.splitext(audio_only_file)
+    defused_audio_file = base_name + "DEFUSED-AUDIO" + "." + audio_codec
 
     # Construct ffmpeg command with a complex filtergraph
     print("##########\nMuting all F-words...\n##########")
     print(f"Filter String: {filter_string}")
-    cmd = ['ffmpeg', '-i', audio_file, '-vn', '-af', filter_string, '-c:a', 'pcm_s16le', '-strict', 'experimental', muted_audio_file]
+    cmd = ['ffmpeg', '-i', audio_only_file, '-vn', '-af', filter_string, '-c:a', audio_codec, '-b:a', bit_rate, '-strict', 'experimental', defused_audio_file]
     
     # Execute the command
     subprocess.run(cmd)
-    return muted_audio_file
-
+    return defused_audio_file
 
 def main():
     # Get user input for the video file
@@ -118,48 +143,38 @@ def main():
         print("##########\nError: File not found.\n##########")
         exit()
 
-    base_name, _ = os.path.splitext(os.path.basename(video_file))
-    directory = os.path.dirname(video_file)
-    extracted_audio_file = os.path.join(directory, f"{base_name}-AUDIO-ONLY.wav")
-    print(f"##########\nVideo File: {video_file}, base_name: {base_name}, extracted_audio_file: {extracted_audio_file}\n##########")
+    # Run a probe command on the video file to get all the codec and bitrate info we need first:
+    audio_codec, bit_rate = get_audio_info(video_file)
 
     # Extract audio from video
-    extract_audio(video_file, extracted_audio_file)
+    audio_only_file = extract_audio(video_file, audio_codec, bit_rate)
 
     # Transcribe audio to text and obtain timestamps
-    swears = transcribe_audio(extracted_audio_file)
+    swears = transcribe_audio(audio_only_file)
 
      # Check if no F-words were found
     if not swears:
         print("##########\nNo F-words found. Exiting gracefully.\n##########")
-        os.remove(extracted_audio_file)
+        os.remove(audio_only_file)
         exit()
         
-    # Mute audio at specified timestamps
-    muted_audio_file = mute_audio(extracted_audio_file, swears)
+    # Mute audio at specified timestamps to "defuse" the f-bombs
+    defused_audio_file = mute_audio(audio_only_file, swears, audio_codec, bit_rate)
 
-    # Compress WAV file down to AAC to preserve size of original video file
-    print("##########\nConvert wav to aac file for size\n##########")
-    aac_file = f"{os.path.splitext(muted_audio_file)[0]}.aac"
-    cmd = ['ffmpeg', '-i', muted_audio_file, '-c:a', 'aac', '-b:a', '320k', aac_file]
-    subprocess.run(cmd)
-
-    # Combine modified audio with original video
-    #ffmpeg -i video.mp4 -i muted-audio.aac -c:v copy -c:a aac -map 0:v:0 -map 1:a:0 output.mp4
+    # Append the desired suffix and the original extension to the base name
     directory, filename = os.path.split(video_file)
     base_name, extension = os.path.splitext(filename)
-    # Append the desired suffix and the original extension to the base name
     clean_video_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
 
-    print("##########\nCombining edited audio with original video file...\n##########")
-    cmd = ['ffmpeg', '-i', video_file, '-i', aac_file, '-c', 'copy', '-map', '0:v:0', '-map', '1:a:0', clean_video_file]
+    # Combine modified audio with original video
+    print("##########\nAdding edited audio as a second audio stream to the original video file...\n##########")
+    cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
     subprocess.run(cmd)
 
     # Remove intermediate audio files
     print("##########\nRemoving intermediate files...\n##########")
-    os.remove(extracted_audio_file)
-    os.remove(muted_audio_file)
-    os.remove(aac_file)
+    os.remove(defused_audio_file)
+    os.remove(audio_only_file)
 
 if __name__ == "__main__":
     main()
