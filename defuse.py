@@ -121,6 +121,46 @@ def transcribe_audio(audio_file):
 
     return swear_list
 
+def compare_with_subtitles(transcribed_text, subtitle_file):
+    print("##########\nComparing transcription with subtitles...\n##########")
+    
+    # Read the subtitle file
+    with open(subtitle_file, 'r') as file:
+        subtitle_lines = file.readlines()
+    
+    # Initialize variables
+    missing_f_words = []
+    current_dialogue = ""
+    
+    # Iterate through subtitle lines
+    for line in subtitle_lines:
+        # If the line is empty, it's a new dialogue
+        if line.strip() == "":
+            # Check if any F-word is missing in the current dialogue
+            if any("fuck" in word.lower() for word in current_dialogue.split()):
+                missing_f_words.append(current_dialogue)
+            current_dialogue = ""
+        else:
+            # Append the dialogue to the current dialogue
+            current_dialogue += line.strip() + " "
+    
+    # Check if any F-word is missing in the last dialogue
+    if any("fuck" in word.lower() for word in current_dialogue.split()):
+        missing_f_words.append(current_dialogue)
+    
+    # Compare missing F-words with the transcribed text
+    for dialogue in missing_f_words:
+        dialogue_words = dialogue.split()
+        for word in dialogue_words:
+            if "fuck" in word.lower() and word not in transcribed_text:
+                # Implement logic to find timestamps based on surrounding words
+                print(f"Missing F-word: {word}")
+                # Add logic here to find timestamps based on surrounding words
+    
+    print("##########\nComparison complete.\n##########")
+
+
+
 # Function to mute audio at specified timestamps using FFmpeg
 def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
     # Initialize an empty list to store filter expressions for muting
