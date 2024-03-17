@@ -6,10 +6,23 @@ import json
 
 # Function to get info from file to figure out the input codec for the audio stream
 def get_audio_info(video_file):
-    print("##########\nExtracting audio from video file...\n##########")
+    print("##########\nGetting audio info from Video file...\n##########")
     # Run ffprobe command to get information about the audio stream
-    ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name:stream=bit_rate', '-of', 'json', video_file]
+    ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index:stream_tags=NAME:stream=codec_name:stream=bit_rate', '-of', 'json', video_file]
     result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
+
+    # First check to see if I've already edited this file:
+    try:
+        streams_info = json.loads(result.stdout)['streams']
+        # Check if any stream has the specified name
+        for stream in streams_info:
+            if 'tags' in stream and 'NAME' in stream['tags'] and stream['tags']['NAME'] == 'Defused (CLEAN) Track':
+                print("Error: Found an existing audio stream with the name 'Defused (CLEAN) Track'. Exiting the script.")
+                exit()
+    except json.JSONDecodeError:
+        print("Error: Failed to parse audio information JSON.")
+        return 'aac', '320000'
+
     if result.returncode != 0:
         print("Error: Failed to get audio codec information, defualt to aac at 320kbps.")
         return 'aac', '320000'
@@ -39,6 +52,7 @@ def get_audio_info(video_file):
         return 'aac', '320000'
     
 def extract_audio(video_file, audio_codec, bit_rate):    
+    print("##########\nExtracting audio from video file...\n##########")
     # Use the ext that relates to the codec;
     # Append a dot before the audio codec value to create the extension
     audio_extension = f".{audio_codec}"
@@ -158,6 +172,17 @@ def main():
     # Check if the file exists
     if not os.path.isfile(video_file):
         print("##########\nError: File not found.\n##########")
+        exit()
+    
+    # Get the directory and filename parts
+    directory, filename = os.path.split(video_file)
+    base_name, extension = os.path.splitext(filename)
+
+    # Check if a file with '-CLEAN' appended exists already (indicating I've already cleaned it)
+    clean_filename = f"{base_name}-CLEAN{extension}"
+    clean_file_path = os.path.join(directory, clean_filename)
+    if os.path.exists(clean_file_path):
+        print(f"A defused file with the name '{clean_filename}' already exists in the directory, exiting")
         exit()
 
     # Run a probe command on the video file to get all the codec and bitrate info we need first:
