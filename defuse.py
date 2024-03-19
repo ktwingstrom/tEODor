@@ -3,6 +3,7 @@ import whisper
 import os
 import argparse
 import json
+import time
 
 # Function to get info from file to figure out the input codec for the audio stream
 def get_audio_info(video_file):
@@ -50,7 +51,12 @@ def get_audio_info(video_file):
     except json.JSONDecodeError:
         print("Error: Failed to parse audio information JSON.")
         return 'aac', '320000'
-    
+
+def extract_subtitles(video_file):
+    print("##########\nExtracting subitles from video file...\n##########")
+    base_name, _ = os.path.splitext(video_file)
+
+
 def extract_audio(video_file, audio_codec, bit_rate):    
     print("##########\nExtracting audio from video file...\n##########")
     # Use the ext that relates to the codec;
@@ -68,9 +74,21 @@ def extract_audio(video_file, audio_codec, bit_rate):
 
 # Function to transcribe audio to text using SpeechRecognition
 def transcribe_audio(audio_file):
-    "Transcribing audio into text to find F-words..."
+    print("##########\nTranscribing audio into text to find F-words...\n##########")
+    
+    # Measure the start time
+    start_time = time.time()
+
     model = whisper.load_model("base")
     result = model.transcribe(audio_file, word_timestamps="True")
+    
+    # Measure the end time
+    end_time = time.time()
+    
+    # Calculate the duration
+    duration = end_time - start_time
+    print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
+    
     # Extract transcribed text and corresponding timestamps
     transcribed_text = result["text"]
 
@@ -81,21 +99,21 @@ def transcribe_audio(audio_file):
 
     # This section is to name the transcription and segments file. Uncomment to use. 
     # Find the index of the first occurrence of 'S' followed by a number
-    #season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
-    #if season_index is not None:
-    #    filename_prefix = '.'.join(filename_parts[:season_index+1])
-    #else:
-    #    filename_prefix = filename
+    season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
+    if season_index is not None:
+        filename_prefix = '.'.join(filename_parts[:season_index+1])
+    else:
+        filename_prefix = filename
 
     # Write transcription to a text file for troubleshooting
-    #transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
-    #with open(transcription_file, 'w') as file:
-    #    file.write(transcribed_text)
+    transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
+    with open(transcription_file, 'w') as file:
+        file.write(transcribed_text)
 
     # Write segments to a JSON file for troubleshooting
-    #segments_file = f"{filename_prefix}-SEGMENTS.json"
-    #with open(segments_file, 'w') as file:
-    #    json.dump(result['segments'], file, indent=4)
+    segments_file = f"{filename_prefix}-SEGMENTS.json"
+    with open(segments_file, 'w') as file:
+        json.dump(result['segments'], file, indent=4)
 
     # pull segments from results
     segments = result['segments']
@@ -232,7 +250,7 @@ def main():
     # Transcribe audio to text and obtain timestamps
     swears = transcribe_audio(audio_only_file)
 
-    
+
 
      # Check if no F-words were found
     if not swears:
