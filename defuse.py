@@ -159,8 +159,6 @@ def compare_with_subtitles(transcribed_text, subtitle_file):
     
     print("##########\nComparison complete.\n##########")
 
-
-
 # Function to mute audio at specified timestamps using FFmpeg
 def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
     # Initialize an empty list to store filter expressions for muting
@@ -233,6 +231,8 @@ def main():
 
     # Transcribe audio to text and obtain timestamps
     swears = transcribe_audio(audio_only_file)
+
+    
 
      # Check if no F-words were found
     if not swears:
