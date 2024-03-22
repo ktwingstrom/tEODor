@@ -4,6 +4,7 @@ import os
 import argparse
 import json
 import time
+import torch
 
 # Function to get info from file to figure out the input codec for the audio stream
 def get_audio_info(video_file):
@@ -74,6 +75,9 @@ def extract_audio(video_file, audio_codec, bit_rate):
 
 # Function to transcribe audio to text using SpeechRecognition
 def transcribe_audio(audio_file):
+
+    # Check if cuda is available
+    print(f"##########\nCuda available? {torch.cuda.is_available()}\n##########")
     print("##########\nTranscribing audio into text to find F-words...\n##########")
     
     # Measure the start time
@@ -107,13 +111,13 @@ def transcribe_audio(audio_file):
 
     # Write transcription to a text file for troubleshooting
     transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
-    with open(transcription_file, 'w') as file:
-        file.write(transcribed_text)
+    #with open(transcription_file, 'w') as file:
+    #    file.write(transcribed_text)
 
     # Write segments to a JSON file for troubleshooting
     segments_file = f"{filename_prefix}-SEGMENTS.json"
-    with open(segments_file, 'w') as file:
-        json.dump(result['segments'], file, indent=4)
+    #with open(segments_file, 'w') as file:
+    #    json.dump(result['segments'], file, indent=4)
 
     # pull segments from results
     segments = result['segments']
@@ -136,7 +140,7 @@ def transcribe_audio(audio_file):
             if "fuck" in word.lower():
                 swear_list.append((word, start, end))
                 print(f"Word: {word}, Start: {start}, End: {end}")
-
+    print(f"##########\nTotal F-words: {len(swear_list)}\n##########")
     return swear_list
 
 def compare_with_subtitles(transcribed_text, subtitle_file):
@@ -211,6 +215,21 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
     subprocess.run(cmd)
     return defused_audio_file
 
+def remove_int_files(defused_audio_file, audio_only_file):
+    # Remove intermediate audio files
+    print("##########\nRemoving intermediate files...\n##########")
+    if os.path.exists(defused_audio_file):
+        os.remove(defused_audio_file)
+        print(f"Deleted: {defused_audio_file}")
+    else:
+        print(f"File not found: {defused_audio_file}")
+
+    if os.path.exists(audio_only_file):
+        os.remove(audio_only_file)
+        print(f"Deleted: {audio_only_file}")
+    else:
+        print(f"File not found: {audio_only_file}"
+
 def main():
     # Get user input for the video file
     parser = argparse.ArgumentParser(description='Process video file and mute profanity.')
@@ -255,7 +274,7 @@ def main():
      # Check if no F-words were found
     if not swears:
         print("##########\nNo F-words found. Exiting gracefully.\n##########")
-        os.remove(audio_only_file)
+        remove_int_files(audio_only_file)
         exit()
         
     # Mute audio at specified timestamps to "defuse" the f-bombs
@@ -271,10 +290,7 @@ def main():
     cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
     subprocess.run(cmd)
 
-    # Remove intermediate audio files
-    print("##########\nRemoving intermediate files...\n##########")
-    os.remove(defused_audio_file)
-    os.remove(audio_only_file)
+    remove_int_files(defused_audio_file, audio_only_file)
 
 if __name__ == "__main__":    
     main()
