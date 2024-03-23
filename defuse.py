@@ -73,8 +73,20 @@ def extract_audio(video_file, audio_codec, bit_rate):
     subprocess.run(cmd, text=True)
     return audio_file
 
+def convert_to_mp3(audio_file):
+    print("##########\nConverting audio to MP3 format...\n##########")
+    # Append ".mp3" extension to the audio file
+    mp3_audio_file = os.path.splitext(audio_file)[0] + ".mp3"
+
+    # Use ffmpeg command to convert audio to MP3 format at 256kbps
+    cmd = ['ffmpeg', '-i', audio_file, '-vn', '-acodec', 'libmp3lame', '-b:a', '256k', mp3_audio_file]
+    subprocess.run(cmd, text=True)
+    
+    print("##########\nAudio conversion to MP3 completed.\n##########")
+    return mp3_audio_file
+
 # Function to transcribe audio to text using SpeechRecognition
-def transcribe_audio(audio_file):
+def transcribe_audio(mp3_audio_file):
 
     # Check if cuda is available
     print(f"##########\nCuda available? {torch.cuda.is_available()}\n##########")
@@ -266,10 +278,11 @@ def main():
     # Extract audio from video
     audio_only_file = extract_audio(video_file, audio_codec, bit_rate)
 
+    # Convert audio to mp3 for better Whisper compatibility
+    mp3_audio_file = convert_to_mp3(audio_only_file)
+
     # Transcribe audio to text and obtain timestamps
-    swears = transcribe_audio(audio_only_file)
-
-
+    swears = transcribe_audio(mp3_audio_file)
 
      # Check if no F-words were found
     if not swears:
