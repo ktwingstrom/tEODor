@@ -227,20 +227,15 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
     subprocess.run(cmd)
     return defused_audio_file
 
-def remove_int_files(defused_audio_file, audio_only_file):
+def remove_int_files(*file_paths):
     # Remove intermediate audio files
     print("##########\nRemoving intermediate files...\n##########")
-    if os.path.exists(defused_audio_file):
-        os.remove(defused_audio_file)
-        print(f"Deleted: {defused_audio_file}")
-    else:
-        print(f"File not found: {defused_audio_file}")
-
-    if os.path.exists(audio_only_file):
-        os.remove(audio_only_file)
-        print(f"Deleted: {audio_only_file}")
-    else:
-        print(f"File not found: {audio_only_file}")
+    for file_path in file_paths:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"##########\nDeleted: {file_path}\n##########")
+        else:
+            print(f"##########\nFile not found: {file_path}\n##########")
 
 def main():
     # Get user input for the video file
@@ -303,7 +298,7 @@ def main():
     cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
     subprocess.run(cmd)
 
-    remove_int_files(defused_audio_file, audio_only_file)
+    remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file)
 
 if __name__ == "__main__":    
     main()
