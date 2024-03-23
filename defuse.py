@@ -96,7 +96,7 @@ def transcribe_audio(mp3_audio_file):
     start_time = time.time()
 
     model = whisper.load_model("base")
-    result = model.transcribe(audio_file, word_timestamps="True")
+    result = model.transcribe(mp3_audio_file, word_timestamps="True")
     
     # Measure the end time
     end_time = time.time()
@@ -109,7 +109,7 @@ def transcribe_audio(mp3_audio_file):
     transcribed_text = result["text"]
 
     # Determine the filename for the transcription file
-    base_name = os.path.basename(audio_file)
+    base_name = os.path.basename(mp3_audio_file)
     filename, _ = os.path.splitext(base_name)
     filename_parts = filename.split('.')
 
