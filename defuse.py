@@ -298,6 +298,7 @@ def main():
     cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
     subprocess.run(cmd)
 
+    # Remove all intermediate files
     remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file)
 
 if __name__ == "__main__":    
