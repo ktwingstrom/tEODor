@@ -228,7 +228,7 @@ def remove_int_files(defused_audio_file, audio_only_file):
         os.remove(audio_only_file)
         print(f"Deleted: {audio_only_file}")
     else:
-        print(f"File not found: {audio_only_file}"
+        print(f"File not found: {audio_only_file}")
 
 def main():
     # Get user input for the video file
