@@ -300,9 +300,10 @@ def main():
         ffmpeg
         .input(video_file)
         .input(defused_audio_file)
-        .output(clean_video_file, vcodec='copy', map='0:v:0', map='0:a:0', map='1:a:0', metadata=('language=eng', 'title=Defused_(CLEAN)_Track', 'name=Defused_(CLEAN)_Track'))
+        .output(clean_video_file, vcodec='copy', map=['0:v:0', '0:a:0', '1:a:0'], metadata=('language=eng', 'title=Defused (CLEAN) Track', 'name=Defused (CLEAN) Track'))
         .run()
     )
+
 
     # Remove all intermediate files
     remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file)
