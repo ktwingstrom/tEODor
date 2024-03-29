@@ -5,6 +5,7 @@ import argparse
 import json
 import time
 import torch
+import ffmpeg
 
 # Function to get info from file to figure out the input codec for the audio stream
 def get_audio_info(video_file):
@@ -295,8 +296,13 @@ def main():
 
     # Combine modified audio with original video
     print("##########\nAdding edited audio as a second audio stream to the original video file...\n##########")
-    cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
-    subprocess.run(cmd)
+    (
+        ffmpeg
+        .input(video_file)
+        .input(defused_audio_file)
+        .output(clean_video_file, vcodec='copy', map='0:v:0', map='0:a:0', map='1:a:0', metadata=('language=eng', 'title=Defused_(CLEAN)_Track', 'name=Defused_(CLEAN)_Track'))
+        .run()
+    )
 
     # Remove all intermediate files
     remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file)
