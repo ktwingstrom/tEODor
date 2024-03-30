@@ -296,11 +296,12 @@ def main():
 
     # Combine modified audio with original video
     print("##########\nAdding edited audio as a second audio stream to the original video file...\n##########")
+    in_vid = ffmpeg.input(video_file)
+    in_aud = ffmpeg.input(defused_audio_file)
     (
         ffmpeg
-        .input(video_file)
-        .input(defused_audio_file)
-        .output(clean_video_file, vcodec='copy', map=['0:v:0', '0:a:0', '1:a:0'], metadata=('language=eng', 'title=Defused (CLEAN) Track', 'name=Defused (CLEAN) Track'))
+        .filter([in_vid, in_aud], vcodec='copy', map=['0:v:0', '0:a:0', '1:a:0'], metadata=('language=eng', 'title=Defused (CLEAN) Track', 'name=Defused (CLEAN) Track'))
+        .output(clean_video_file)
         .run()
     )
 
