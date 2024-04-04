@@ -3,6 +3,9 @@ import whisper
 import os
 import argparse
 import json
+import time
+import torch
+import ffmpeg
 
 # Function to get info from file to figure out the input codec for the audio stream
 def get_audio_info(video_file):
@@ -50,7 +53,12 @@ def get_audio_info(video_file):
     except json.JSONDecodeError:
         print("Error: Failed to parse audio information JSON.")
         return 'aac', '320000'
-    
+
+def extract_subtitles(video_file):
+    print("##########\nExtracting subitles from video file...\n##########")
+    base_name, _ = os.path.splitext(video_file)
+
+
 def extract_audio(video_file, audio_codec, bit_rate):    
     print("##########\nExtracting audio from video file...\n##########")
     # Use the ext that relates to the codec;
@@ -66,34 +74,61 @@ def extract_audio(video_file, audio_codec, bit_rate):
     subprocess.run(cmd, text=True)
     return audio_file
 
+def convert_to_mp3(audio_file):
+    print("##########\nConverting audio to MP3 format...\n##########")
+    # Append ".mp3" extension to the audio file
+    mp3_audio_file = os.path.splitext(audio_file)[0] + ".mp3"
+
+    # Use ffmpeg command to convert audio to MP3 format at 256kbps
+    cmd = ['ffmpeg', '-i', audio_file, '-vn', '-acodec', 'libmp3lame', '-b:a', '256k', mp3_audio_file]
+    subprocess.run(cmd, text=True)
+    
+    print("##########\nAudio conversion to MP3 completed.\n##########")
+    return mp3_audio_file
+
 # Function to transcribe audio to text using SpeechRecognition
-def transcribe_audio(audio_file):
-    "Transcribing audio into text to find F-words..."
+def transcribe_audio(mp3_audio_file):
+
+    # Check if cuda is available
+    print(f"##########\nCuda available? {torch.cuda.is_available()}\n##########")
+    print("##########\nTranscribing audio into text to find F-words...\n##########")
+    
+    # Measure the start time
+    start_time = time.time()
+
     model = whisper.load_model("base")
-    result = model.transcribe(audio_file, word_timestamps="True")
+    result = model.transcribe(mp3_audio_file, word_timestamps="True")
+    
+    # Measure the end time
+    end_time = time.time()
+    
+    # Calculate the duration
+    duration = end_time - start_time
+    print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
+    
     # Extract transcribed text and corresponding timestamps
     transcribed_text = result["text"]
 
     # Determine the filename for the transcription file
-    base_name = os.path.basename(audio_file)
+    base_name = os.path.basename(mp3_audio_file)
     filename, _ = os.path.splitext(base_name)
     filename_parts = filename.split('.')
 
     # This section is to name the transcription and segments file. Uncomment to use. 
     # Find the index of the first occurrence of 'S' followed by a number
-    #season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
-    #if season_index is not None:
-    #    filename_prefix = '.'.join(filename_parts[:season_index+1])
-    #else:
-    #    filename_prefix = filename
+    season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
+    if season_index is not None:
+        filename_prefix = '.'.join(filename_parts[:season_index+1])
+    else:
+        filename_prefix = filename
 
     # Write transcription to a text file for troubleshooting
-    #transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
+    transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
     #with open(transcription_file, 'w') as file:
     #    file.write(transcribed_text)
 
     # Write segments to a JSON file for troubleshooting
-    #segments_file = f"{filename_prefix}-SEGMENTS.json"
+    segments_file = f"{filename_prefix}-SEGMENTS.json"
     #with open(segments_file, 'w') as file:
     #    json.dump(result['segments'], file, indent=4)
 
@@ -118,8 +153,46 @@ def transcribe_audio(audio_file):
             if "fuck" in word.lower():
                 swear_list.append((word, start, end))
                 print(f"Word: {word}, Start: {start}, End: {end}")
-
+    print(f"##########\nTotal F-words: {len(swear_list)}\n##########")
     return swear_list
+
+def compare_with_subtitles(transcribed_text, subtitle_file):
+    print("##########\nComparing transcription with subtitles...\n##########")
+    
+    # Read the subtitle file
+    with open(subtitle_file, 'r') as file:
+        subtitle_lines = file.readlines()
+    
+    # Initialize variables
+    missing_f_words = []
+    current_dialogue = ""
+    
+    # Iterate through subtitle lines
+    for line in subtitle_lines:
+        # If the line is empty, it's a new dialogue
+        if line.strip() == "":
+            # Check if any F-word is missing in the current dialogue
+            if any("fuck" in word.lower() for word in current_dialogue.split()):
+                missing_f_words.append(current_dialogue)
+            current_dialogue = ""
+        else:
+            # Append the dialogue to the current dialogue
+            current_dialogue += line.strip() + " "
+    
+    # Check if any F-word is missing in the last dialogue
+    if any("fuck" in word.lower() for word in current_dialogue.split()):
+        missing_f_words.append(current_dialogue)
+    
+    # Compare missing F-words with the transcribed text
+    for dialogue in missing_f_words:
+        dialogue_words = dialogue.split()
+        for word in dialogue_words:
+            if "fuck" in word.lower() and word not in transcribed_text:
+                # Implement logic to find timestamps based on surrounding words
+                print(f"Missing F-word: {word}")
+                # Add logic here to find timestamps based on surrounding words
+    
+    print("##########\nComparison complete.\n##########")
 
 # Function to mute audio at specified timestamps using FFmpeg
 def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
@@ -154,6 +227,16 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
     # Execute the command
     subprocess.run(cmd)
     return defused_audio_file
+
+def remove_int_files(*file_paths):
+    # Remove intermediate audio files
+    print("##########\nRemoving intermediate files...\n##########")
+    for file_path in file_paths:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"##########\nDeleted: {file_path}\n##########")
+        else:
+            print(f"##########\nFile not found: {file_path}\n##########")
 
 def main():
     # Get user input for the video file
@@ -191,13 +274,16 @@ def main():
     # Extract audio from video
     audio_only_file = extract_audio(video_file, audio_codec, bit_rate)
 
+    # Convert audio to mp3 for better Whisper compatibility
+    mp3_audio_file = convert_to_mp3(audio_only_file)
+
     # Transcribe audio to text and obtain timestamps
-    swears = transcribe_audio(audio_only_file)
+    swears = transcribe_audio(mp3_audio_file)
 
      # Check if no F-words were found
     if not swears:
         print("##########\nNo F-words found. Exiting gracefully.\n##########")
-        os.remove(audio_only_file)
+        remove_int_files(audio_only_file)
         exit()
         
     # Mute audio at specified timestamps to "defuse" the f-bombs
@@ -213,11 +299,8 @@ def main():
     cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
     subprocess.run(cmd)
 
-    # Remove intermediate audio files
-    print("##########\nRemoving intermediate files...\n##########")
-    os.remove(defused_audio_file)
-    os.remove(audio_only_file)
-    os.remove(video_file)
+    # Remove all intermediate files
+    remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, video_file)
 
 if __name__ == "__main__":    
     main()
