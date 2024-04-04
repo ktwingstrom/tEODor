@@ -217,6 +217,7 @@ def main():
     print("##########\nRemoving intermediate files...\n##########")
     os.remove(defused_audio_file)
     os.remove(audio_only_file)
+    os.remove(video_file)
 
 if __name__ == "__main__":    
     main()
