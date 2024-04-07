@@ -29,7 +29,7 @@ fi
 # Find all audio files in the directory and its subdirectories
 find "$directory" -type f \( -iname "*.mp3" -o -iname "*.flac" -o -iname "*.wav" -o -iname "*.ogg" -o -iname "*.m4a" -o -iname "*.aac" -o -iname "*.wma" -o -iname "*.m4b" \) -exec sh -c '
     for audio_file do
-        # Execute the defuse command for each video file
+        # Execute the defuse command for each audio file
         echo "Audio File: $audio_file"
         /usr/bin/python3 /Users/kevint/Documents/scripts/tEODor/defuse-audio-only.py -i "$audio_file"
     done
