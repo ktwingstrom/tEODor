@@ -8,10 +8,10 @@ import torch
 import ffmpeg
 
 # Function to get info from file to figure out the input codec for the audio stream
-def get_audio_info(video_file):
+def get_audio_info(audio_file):
     print("##########\nGetting audio info from Video file...\n##########")
     # Run ffprobe command to get information about the audio stream
-    ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index:stream_tags=NAME:stream=codec_name:stream=bit_rate', '-of', 'json', video_file]
+    ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index:stream_tags=NAME:stream=codec_name:stream=bit_rate', '-of', 'json', audio_file]
     result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
 
     # First check to see if I've already edited this file:
@@ -24,11 +24,11 @@ def get_audio_info(video_file):
                 exit()
     except json.JSONDecodeError:
         print("Error: Failed to parse audio information JSON.")
-        return 'aac', '320000'
+        return 'mp3', '128000'
 
     if result.returncode != 0:
-        print("Error: Failed to get audio codec information, defualt to aac at 320kbps.")
-        return 'aac', '320000'
+        print("Error: Failed to get audio codec information, defualt to aac at 128kbps.")
+        return 'mp3', '128000'
     # Parse the JSON output to get the audio codec
     try:
         codec_info = json.loads(result.stdout)
@@ -37,54 +37,22 @@ def get_audio_info(video_file):
         try:
             audio_codec = codec_info['streams'][0]['codec_name']
         except (KeyError, IndexError):
-            print("Error: Failed to parse audio codec information. Defaulting to 'aac'.")
-            audio_codec = 'aac'
+            print("Error: Failed to parse audio codec information. Defaulting to 'mp3'.")
+            audio_codec = 'mp3'
 
         # Try to get bitrate information
         try:
             bit_rate = codec_info['streams'][0]['bit_rate']
         except (KeyError, IndexError):
-            print("Error: Failed to parse bitrate information. Defaulting to '320000'.")
-            bit_rate = '320000'
+            print("Error: Failed to parse bitrate information. Defaulting to '128kbps'.")
+            bit_rate = '128000'
 
         print(f"##########\nAudio Codec & Bitrate from source:\nCodec:{audio_codec}\nBitrate:{bit_rate}\n##########")
         return audio_codec, bit_rate
     
     except json.JSONDecodeError:
         print("Error: Failed to parse audio information JSON.")
-        return 'aac', '320000'
-
-def extract_subtitles(video_file):
-    print("##########\nExtracting subitles from video file...\n##########")
-    base_name, _ = os.path.splitext(video_file)
-
-
-def extract_audio(video_file, audio_codec, bit_rate):    
-    print("##########\nExtracting audio from video file...\n##########")
-    # Use the ext that relates to the codec;
-    # Append a dot before the audio codec value to create the extension
-    audio_extension = f".{audio_codec}"
-
-    # Change the extension of video_file to audio_extension
-    base_name, _ = os.path.splitext(video_file)
-    audio_file = base_name + "-AUDIO" + audio_extension
-    
-    # Use the determined audio codec in the ffmpeg command
-    cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec, '-b:a', bit_rate, audio_file]
-    subprocess.run(cmd, text=True)
-    return audio_file
-
-def convert_to_mp3(audio_file):
-    print("##########\nConverting audio to MP3 format...\n##########")
-    # Append ".mp3" extension to the audio file
-    mp3_audio_file = os.path.splitext(audio_file)[0] + ".mp3"
-
-    # Use ffmpeg command to convert audio to MP3 format at 256kbps
-    cmd = ['ffmpeg', '-i', audio_file, '-vn', '-acodec', 'libmp3lame', '-b:a', '256k', mp3_audio_file]
-    subprocess.run(cmd, text=True)
-    
-    print("##########\nAudio conversion to MP3 completed.\n##########")
-    return mp3_audio_file
+        return 'mp3', '128000'
 
 # Function to transcribe audio to text using OpenAI Whisper
 def transcribe_audio(mp3_audio_file):
@@ -156,44 +124,6 @@ def transcribe_audio(mp3_audio_file):
     print(f"##########\nTotal F-words: {len(swear_list)}\n##########")
     return swear_list
 
-def compare_with_subtitles(transcribed_text, subtitle_file):
-    print("##########\nComparing transcription with subtitles...\n##########")
-    
-    # Read the subtitle file
-    with open(subtitle_file, 'r') as file:
-        subtitle_lines = file.readlines()
-    
-    # Initialize variables
-    missing_f_words = []
-    current_dialogue = ""
-    
-    # Iterate through subtitle lines
-    for line in subtitle_lines:
-        # If the line is empty, it's a new dialogue
-        if line.strip() == "":
-            # Check if any F-word is missing in the current dialogue
-            if any("fuck" in word.lower() for word in current_dialogue.split()):
-                missing_f_words.append(current_dialogue)
-            current_dialogue = ""
-        else:
-            # Append the dialogue to the current dialogue
-            current_dialogue += line.strip() + " "
-    
-    # Check if any F-word is missing in the last dialogue
-    if any("fuck" in word.lower() for word in current_dialogue.split()):
-        missing_f_words.append(current_dialogue)
-    
-    # Compare missing F-words with the transcribed text
-    for dialogue in missing_f_words:
-        dialogue_words = dialogue.split()
-        for word in dialogue_words:
-            if "fuck" in word.lower() and word not in transcribed_text:
-                # Implement logic to find timestamps based on surrounding words
-                print(f"Missing F-word: {word}")
-                # Add logic here to find timestamps based on surrounding words
-    
-    print("##########\nComparison complete.\n##########")
-
 # Function to mute audio at specified timestamps using FFmpeg
 def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
     # Initialize an empty list to store filter expressions for muting
@@ -238,27 +168,28 @@ def remove_int_files(*file_paths):
         else:
             print(f"##########\nFile not found: {file_path}\n##########")
 
+
 def main():
     # Get user input for the video file
-    parser = argparse.ArgumentParser(description='Process video file and mute profanity.')
-    parser.add_argument('-i', '--input', help='Input video file', required=True)
+    parser = argparse.ArgumentParser(description='Process audio file and mute profanity.')
+    parser.add_argument('-i', '--input', help='Input audio file', required=True)
     args = parser.parse_args()
 
-    video_file = args.input
+    audio_file = args.input
 
     # Uncomment hardcoded video file for testing
-    #video_file = '/Users/kevint/Downloads/Test/Its.Always.Sunny.in.Philadelphia.S16E07.720p.WEB.x265-MiNX.eztv.re.mkv'
+    #audio_file = '/Users/kevint/Downloads/Test/Its.Always.Sunny.in.Philadelphia.S16E07.720p.WEB.x265-MiNX.eztv.re.mkv'
 
     # Convert user input to absolute path
-    video_file = os.path.abspath(video_file)
+    audio_file = os.path.abspath(audio_file)
 
     # Check if the file exists
-    if not os.path.isfile(video_file):
+    if not os.path.isfile(audio_file):
         print("##########\nError: File not found.\n##########")
         exit()
     
     # Get the directory and filename parts
-    directory, filename = os.path.split(video_file)
+    directory, filename = os.path.split(audio_file)
     base_name, extension = os.path.splitext(filename)
 
     # Check if a file with '-CLEAN' appended exists already (indicating I've already cleaned it)
@@ -269,10 +200,10 @@ def main():
         exit()
 
     # Run a probe command on the video file to get all the codec and bitrate info we need first:
-    audio_codec, bit_rate = get_audio_info(video_file)
+    audio_codec, bit_rate = get_audio_info(audio_file)
 
     # Extract audio from video
-    audio_only_file = extract_audio(video_file, audio_codec, bit_rate)
+    audio_only_file = extract_audio(audio_file, audio_codec, bit_rate)
 
     # Convert audio to mp3 for better Whisper compatibility
     mp3_audio_file = convert_to_mp3(audio_only_file)
@@ -290,17 +221,18 @@ def main():
     defused_audio_file = mute_audio(audio_only_file, swears, audio_codec, bit_rate)
 
     # Append the desired suffix and the original extension to the base name
-    directory, filename = os.path.split(video_file)
+    directory, filename = os.path.split(audio_file)
     base_name, extension = os.path.splitext(filename)
-    clean_video_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
+    clean_audio_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
 
     # Combine modified audio with original video
     print("##########\nAdding edited audio as a second audio stream to the original video file...\n##########")
-    cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
+    cmd = ['ffmpeg', '-i', audio_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_audio_file]
     subprocess.run(cmd)
 
     # Remove all intermediate files
-    remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, video_file)
+    remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, audio_file)
 
 if __name__ == "__main__":    
     main()
+
