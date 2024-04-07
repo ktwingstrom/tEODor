@@ -9,7 +9,7 @@ import ffmpeg
 
 # Function to get info from file to figure out the input codec for the audio stream
 def get_audio_info(audio_file):
-    print("##########\nGetting audio info from Video file...\n##########")
+    print("##########\nGetting audio info from file...\n##########")
     # Run ffprobe command to get information about the audio stream
     ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index:stream_tags=NAME:stream=codec_name:stream=bit_rate', '-of', 'json', audio_file]
     result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
@@ -92,13 +92,13 @@ def transcribe_audio(mp3_audio_file):
 
     # Write transcription to a text file for troubleshooting
     transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
-    #with open(transcription_file, 'w') as file:
-    #    file.write(transcribed_text)
+    with open(transcription_file, 'w') as file:
+        file.write(transcribed_text)
 
     # Write segments to a JSON file for troubleshooting
     segments_file = f"{filename_prefix}-SEGMENTS.json"
-    #with open(segments_file, 'w') as file:
-    #    json.dump(result['segments'], file, indent=4)
+    with open(segments_file, 'w') as file:
+        json.dump(result['segments'], file, indent=4)
 
     # pull segments from results
     segments = result['segments']
@@ -202,36 +202,24 @@ def main():
     # Run a probe command on the video file to get all the codec and bitrate info we need first:
     audio_codec, bit_rate = get_audio_info(audio_file)
 
-    # Extract audio from video
-    audio_only_file = extract_audio(audio_file, audio_codec, bit_rate)
-
-    # Convert audio to mp3 for better Whisper compatibility
-    mp3_audio_file = convert_to_mp3(audio_only_file)
-
     # Transcribe audio to text and obtain timestamps
-    swears = transcribe_audio(mp3_audio_file)
+    swears = transcribe_audio(audio_file)
 
      # Check if no F-words were found
     if not swears:
         print("##########\nNo F-words found. Exiting gracefully.\n##########")
-        remove_int_files(audio_only_file)
         exit()
         
     # Mute audio at specified timestamps to "defuse" the f-bombs
-    defused_audio_file = mute_audio(audio_only_file, swears, audio_codec, bit_rate)
+    defused_audio_file = mute_audio(audio_file, swears, audio_codec, bit_rate)
 
     # Append the desired suffix and the original extension to the base name
     directory, filename = os.path.split(audio_file)
     base_name, extension = os.path.splitext(filename)
     clean_audio_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
 
-    # Combine modified audio with original video
-    print("##########\nAdding edited audio as a second audio stream to the original video file...\n##########")
-    cmd = ['ffmpeg', '-i', audio_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_audio_file]
-    subprocess.run(cmd)
-
     # Remove all intermediate files
-    remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, audio_file)
+    #remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, audio_file)
 
 if __name__ == "__main__":    
     main()
