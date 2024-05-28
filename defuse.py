@@ -49,7 +49,7 @@ def get_audio_info(video_file):
 
         print(f"##########\nAudio Codec & Bitrate from source:\nCodec:{audio_codec}\nBitrate:{bit_rate}\n##########")
         return audio_codec, bit_rate
-    
+
     except json.JSONDecodeError:
         print("Error: Failed to parse audio information JSON.")
         return 'aac', '320000'
@@ -59,7 +59,7 @@ def extract_subtitles(video_file):
     base_name, _ = os.path.splitext(video_file)
 
 
-def extract_audio(video_file, audio_codec, bit_rate):    
+def extract_audio(video_file, audio_codec, bit_rate):
     print("##########\nExtracting audio from video file...\n##########")
     # Use the ext that relates to the codec;
     # Append a dot before the audio codec value to create the extension
@@ -68,9 +68,10 @@ def extract_audio(video_file, audio_codec, bit_rate):
     # Change the extension of video_file to audio_extension
     base_name, _ = os.path.splitext(video_file)
     audio_file = base_name + "-AUDIO" + audio_extension
-    
+
     # Use the determined audio codec in the ffmpeg command
-    cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec, '-b:a', bit_rate, audio_file]
+    cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', 'copy', '-strict', '-2', audio_file]
+    #cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec, '-b:a', bit_rate, '-strict', '-2', audio_file]
     subprocess.run(cmd, text=True)
     return audio_file
 
@@ -82,30 +83,30 @@ def convert_to_mp3(audio_file):
     # Use ffmpeg command to convert audio to MP3 format at 256kbps
     cmd = ['ffmpeg', '-i', audio_file, '-vn', '-acodec', 'libmp3lame', '-b:a', '256k', mp3_audio_file]
     subprocess.run(cmd, text=True)
-    
+
     print("##########\nAudio conversion to MP3 completed.\n##########")
     return mp3_audio_file
 
-# Function to transcribe audio to text using OpenAI Whisper
+# Function to transcribe audio to text using SpeechRecognition
 def transcribe_audio(mp3_audio_file):
 
     # Check if cuda is available
     print(f"##########\nCuda available? {torch.cuda.is_available()}\n##########")
     print("##########\nTranscribing audio into text to find F-words...\n##########")
-    
+
     # Measure the start time
     start_time = time.time()
 
     model = whisper.load_model("base")
     result = model.transcribe(mp3_audio_file, word_timestamps="True")
-    
+
     # Measure the end time
     end_time = time.time()
-    
+
     # Calculate the duration
     duration = end_time - start_time
     print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
-    
+
     # Extract transcribed text and corresponding timestamps
     transcribed_text = result["text"]
 
@@ -114,7 +115,7 @@ def transcribe_audio(mp3_audio_file):
     filename, _ = os.path.splitext(base_name)
     filename_parts = filename.split('.')
 
-    # This section is to name the transcription and segments file. Uncomment to use. 
+    # This section is to name the transcription and segments file. Uncomment to use.
     # Find the index of the first occurrence of 'S' followed by a number
     season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
     if season_index is not None:
@@ -123,19 +124,19 @@ def transcribe_audio(mp3_audio_file):
         filename_prefix = filename
 
     # Write transcription to a text file for troubleshooting
-    transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
+    #transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
     #with open(transcription_file, 'w') as file:
     #    file.write(transcribed_text)
 
     # Write segments to a JSON file for troubleshooting
-    segments_file = f"{filename_prefix}-SEGMENTS.json"
+    #segments_file = f"{filename_prefix}-SEGMENTS.json"
     #with open(segments_file, 'w') as file:
     #    json.dump(result['segments'], file, indent=4)
 
     # pull segments from results
     segments = result['segments']
-    
-    # Instantiate empty list 
+
+    # Instantiate empty list
     swear_list = []
 
     for segment in segments:
@@ -158,15 +159,15 @@ def transcribe_audio(mp3_audio_file):
 
 def compare_with_subtitles(transcribed_text, subtitle_file):
     print("##########\nComparing transcription with subtitles...\n##########")
-    
+
     # Read the subtitle file
     with open(subtitle_file, 'r') as file:
         subtitle_lines = file.readlines()
-    
+
     # Initialize variables
     missing_f_words = []
     current_dialogue = ""
-    
+
     # Iterate through subtitle lines
     for line in subtitle_lines:
         # If the line is empty, it's a new dialogue
@@ -178,11 +179,11 @@ def compare_with_subtitles(transcribed_text, subtitle_file):
         else:
             # Append the dialogue to the current dialogue
             current_dialogue += line.strip() + " "
-    
+
     # Check if any F-word is missing in the last dialogue
     if any("fuck" in word.lower() for word in current_dialogue.split()):
         missing_f_words.append(current_dialogue)
-    
+
     # Compare missing F-words with the transcribed text
     for dialogue in missing_f_words:
         dialogue_words = dialogue.split()
@@ -191,7 +192,7 @@ def compare_with_subtitles(transcribed_text, subtitle_file):
                 # Implement logic to find timestamps based on surrounding words
                 print(f"Missing F-word: {word}")
                 # Add logic here to find timestamps based on surrounding words
-    
+
     print("##########\nComparison complete.\n##########")
 
 # Function to mute audio at specified timestamps using FFmpeg
@@ -223,7 +224,7 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
     print("##########\nMuting all F-words...\n##########")
     print(f"Filter String: {filter_string}")
     cmd = ['ffmpeg', '-i', audio_only_file, '-vn', '-af', filter_string, '-c:a', audio_codec, '-b:a', bit_rate, '-strict', 'experimental', defused_audio_file]
-    
+
     # Execute the command
     subprocess.run(cmd)
     return defused_audio_file
@@ -239,68 +240,67 @@ def remove_int_files(*file_paths):
             print(f"##########\nFile not found: {file_path}\n##########")
 
 def main():
-    # Get user input for the video file
-    parser = argparse.ArgumentParser(description='Process video file and mute profanity.')
-    parser.add_argument('-i', '--input', help='Input video file', required=True)
+    # Get user input for the video files
+    parser = argparse.ArgumentParser(description='Process video files and mute profanity.')
+    parser.add_argument('-i', '--input', nargs='+', help='Input video files', required=True)
     args = parser.parse_args()
 
-    video_file = args.input
+    video_files = args.input
 
-    # Uncomment hardcoded video file for testing
-    #video_file = '/Users/kevint/Downloads/Test/Its.Always.Sunny.in.Philadelphia.S16E07.720p.WEB.x265-MiNX.eztv.re.mkv'
+    # Loop through each input file
+    for video_file in video_files:
+        # Convert user input to absolute path
+        video_file = os.path.abspath(video_file)
 
-    # Convert user input to absolute path
-    video_file = os.path.abspath(video_file)
+        # Check if the file exists
+        if not os.path.isfile(video_file):
+            print(f"##########\nError: File not found: {video_file}\n##########")
+            continue
 
-    # Check if the file exists
-    if not os.path.isfile(video_file):
-        print("##########\nError: File not found.\n##########")
-        exit()
-    
-    # Get the directory and filename parts
-    directory, filename = os.path.split(video_file)
-    base_name, extension = os.path.splitext(filename)
+        # Get the directory and filename parts
+        directory, filename = os.path.split(video_file)
+        base_name, extension = os.path.splitext(filename)
 
-    # Check if a file with '-CLEAN' appended exists already (indicating I've already cleaned it)
-    clean_filename = f"{base_name}-CLEAN{extension}"
-    clean_file_path = os.path.join(directory, clean_filename)
-    if os.path.exists(clean_file_path):
-        print(f"A defused file with the name '{clean_filename}' already exists in the directory, exiting")
-        exit()
+        # Check if a file with '-CLEAN' appended exists already (indicating I've already cleaned it)
+        clean_filename = f"{base_name}-CLEAN{extension}"
+        clean_file_path = os.path.join(directory, clean_filename)
+        if os.path.exists(clean_file_path):
+            print(f"A defused file with the name '{clean_filename}' already exists in the directory, skipping: {video_file}")
+            continue
 
-    # Run a probe command on the video file to get all the codec and bitrate info we need first:
-    audio_codec, bit_rate = get_audio_info(video_file)
+        # Run a probe command on the video file to get all the codec and bitrate info we need first:
+        audio_codec, bit_rate = get_audio_info(video_file)
 
-    # Extract audio from video
-    audio_only_file = extract_audio(video_file, audio_codec, bit_rate)
+        # Extract audio from video
+        audio_only_file = extract_audio(video_file, audio_codec, bit_rate)
 
-    # Convert audio to mp3 for better Whisper compatibility
-    mp3_audio_file = convert_to_mp3(audio_only_file)
+        # Convert audio to mp3 for better Whisper compatibility
+        mp3_audio_file = convert_to_mp3(audio_only_file)
 
-    # Transcribe audio to text and obtain timestamps
-    swears = transcribe_audio(mp3_audio_file)
+        # Transcribe audio to text and obtain timestamps
+        swears = transcribe_audio(mp3_audio_file)
 
-     # Check if no F-words were found
-    if not swears:
-        print("##########\nNo F-words found. Exiting gracefully.\n##########")
-        remove_int_files(audio_only_file)
-        exit()
-        
-    # Mute audio at specified timestamps to "defuse" the f-bombs
-    defused_audio_file = mute_audio(audio_only_file, swears, audio_codec, bit_rate)
+         # Check if no F-words were found
+        if not swears:
+            print("##########\nNo F-words found. Exiting gracefully.\n##########")
+            remove_int_files(audio_only_file, mp3_audio_file)
+            continue
 
-    # Append the desired suffix and the original extension to the base name
-    directory, filename = os.path.split(video_file)
-    base_name, extension = os.path.splitext(filename)
-    clean_video_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
+        # Mute audio at specified timestamps to "defuse" the f-bombs
+        defused_audio_file = mute_audio(audio_only_file, swears, audio_codec, bit_rate)
 
-    # Combine modified audio with original video
-    print("##########\nAdding edited audio as a second audio stream to the original video file...\n##########")
-    cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
-    subprocess.run(cmd)
+        # Append the desired suffix and the original extension to the base name
+        directory, filename = os.path.split(video_file)
+        base_name, extension = os.path.splitext(filename)
+        clean_video_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
 
-    # Remove all intermediate files
-    remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, video_file)
+        # Combine modified audio with original video
+        print("##########\nAdding edited audio as a second audio stream to the original video file...\n##########")
+        cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
+        subprocess.run(cmd)
 
-if __name__ == "__main__":    
+        # Remove all intermediate files
+        remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, video_file)
+
+if __name__ == "__main__":
     main()
