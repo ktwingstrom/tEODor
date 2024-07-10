@@ -12,7 +12,7 @@ import re
 def get_info(video_file):
     print("##########\nGetting audio and subtitle info from video file...\n##########")
     # Run ffprobe command to get information about the audio and subtitle streams
-    ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a:s', '-show_entries', 'stream=index:stream_tags=NAME:stream=codec_name:stream=bit_rate', '-of', 'json', video_file]
+    ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 's', '-show_entries', 'stream=index:stream_tags=NAME:stream=codec_name:stream=bit_rate', '-of', 'json', video_file]
     result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
 
     audio_codec = 'aac'
@@ -35,7 +35,7 @@ def get_info(video_file):
                 bit_rate = stream.get('bit_rate', bit_rate)
 
             # Check for subtitle stream
-            if 'codec_type' in stream and stream['codec_type'] == 'subtitle':
+            if stream.get('codec_type') == 'subtitle' or 'codec_name' in stream and 'sub' in stream['codec_name'].lower():
                 subtitles_exist = True
 
     except json.JSONDecodeError:
