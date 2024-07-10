@@ -5,16 +5,21 @@ import argparse
 import json
 import time
 import torch
-import ffmpeg
+import pysrt
+import re
 
 # Function to get info from file to figure out the input codec for the audio stream
-def get_audio_info(video_file):
-    print("##########\nGetting audio info from Video file...\n##########")
-    # Run ffprobe command to get information about the audio stream
-    ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index:stream_tags=NAME:stream=codec_name:stream=bit_rate', '-of', 'json', video_file]
+def get_info(video_file):
+    print("##########\nGetting audio and subtitle info from video file...\n##########")
+    # Run ffprobe command to get information about the audio and subtitle streams
+    ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a:s', '-show_entries', 'stream=index:stream_tags=NAME:stream=codec_name:stream=bit_rate', '-of', 'json', video_file]
     result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
 
-    # First check to see if I've already edited this file:
+    audio_codec = 'aac'
+    bit_rate = '320000'
+    subtitles_exist = False
+
+    # First check to see if the video file has been edited before:
     try:
         streams_info = json.loads(result.stdout)['streams']
         # Check if any stream has the specified name
@@ -22,41 +27,60 @@ def get_audio_info(video_file):
             if 'tags' in stream and 'NAME' in stream['tags'] and stream['tags']['NAME'] == 'Defused (CLEAN) Track':
                 print("Error: Found an existing audio stream with the name 'Defused (CLEAN) Track'. Exiting the script.")
                 exit()
+
+        # Extract audio codec and bit rate
+        for stream in streams_info:
+            if 'codec_type' in stream and stream['codec_type'] == 'audio':
+                audio_codec = stream.get('codec_name', audio_codec)
+                bit_rate = stream.get('bit_rate', bit_rate)
+
+            # Check for subtitle stream
+            if 'codec_type' in stream and stream['codec_type'] == 'subtitle':
+                subtitles_exist = True
+
     except json.JSONDecodeError:
-        print("Error: Failed to parse audio information JSON.")
-        return 'aac', '320000'
+        print("Error: Failed to parse stream information JSON.")
 
     if result.returncode != 0:
-        print("Error: Failed to get audio codec information, defualt to aac at 320kbps.")
-        return 'aac', '320000'
-    # Parse the JSON output to get the audio codec
-    try:
-        codec_info = json.loads(result.stdout)
+        print("Error: Failed to get stream information, defaulting to 'aac' codec at 320kbps.")
+    
+    print(f"##########\nAudio Codec & Bitrate from source:\nCodec: {audio_codec}\nBitrate: {bit_rate}\n##########")
+    print(f"##########\nSubtitles Exist in Video File: {subtitles_exist}\n##########")
 
-        # Try to get codec information
-        try:
-            audio_codec = codec_info['streams'][0]['codec_name']
-        except (KeyError, IndexError):
-            print("Error: Failed to parse audio codec information. Defaulting to 'aac'.")
-            audio_codec = 'aac'
-
-        # Try to get bitrate information
-        try:
-            bit_rate = codec_info['streams'][0]['bit_rate']
-        except (KeyError, IndexError):
-            print("Error: Failed to parse bitrate information. Defaulting to '320000'.")
-            bit_rate = '320000'
-
-        print(f"##########\nAudio Codec & Bitrate from source:\nCodec:{audio_codec}\nBitrate:{bit_rate}\n##########")
-        return audio_codec, bit_rate
-
-    except json.JSONDecodeError:
-        print("Error: Failed to parse audio information JSON.")
-        return 'aac', '320000'
-
-def extract_subtitles(video_file):
-    print("##########\nExtracting subitles from video file...\n##########")
+    # Check for external SRT subtitle file
     base_name, _ = os.path.splitext(video_file)
+    subtitle_file = base_name + ".srt"
+    external_srt_exists = os.path.isfile(subtitle_file)
+    print(f"##########\nExternal SRT Subtitle File Exists: {external_srt_exists}\n##########")
+
+    return audio_codec, bit_rate, subtitles_exist, external_srt_exists
+
+def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
+    print("##########\nExtracting subtitles from video file...\n##########")
+    base_name, _ = os.path.splitext(video_file)
+    subtitle_file = base_name + ".srt"
+
+    if external_srt_exists:
+        with open(subtitle_file, 'r', encoding='utf-8') as file:
+            subtitles = file.read()
+    else:
+        # Extract subtitles from the video file using ffmpeg
+        subtitle_file = base_name + "_subtitles.srt"
+        cmd = ['ffmpeg', '-i', video_file, '-map', '0:s:0', subtitle_file]
+        subprocess.run(cmd, text=True)
+        with open(subtitle_file, 'r', encoding='utf-8') as file:
+            subtitles = file.read()
+
+    # Search for instances of the string "fuck" in a case-insensitive manner
+    matches = re.findall(r'fuck', subtitles, re.IGNORECASE)
+    if matches:
+        print(f"##########\nFound {len(matches)} instances of 'f**k' in subtitles.\n##########")
+        subtitle_swears = True
+    else:
+        print("##########\nNo instances of 'f**k' found in subtitles.\n##########")
+        subtitle_swears = False
+
+    return subtitle_swears
 
 
 def extract_audio(video_file, audio_codec, bit_rate):
@@ -268,8 +292,15 @@ def main():
             print(f"A defused file with the name '{clean_filename}' already exists in the directory, skipping: {video_file}")
             continue
 
-        # Run a probe command on the video file to get all the codec and bitrate info we need first:
-        audio_codec, bit_rate = get_audio_info(video_file)
+        # Run a probe command on the video file to get all the codec, bitrate, and subtitle info we need first:
+        audio_codec, bit_rate, subtitles_exist, external_srt_exists = get_info(video_file)
+
+        # Extract subtitles if they exist, and if there are no swears exit. 
+        if subtitles_exist or external_srt_exists:
+            subtitle_swears = extract_subtitles(video_file, subtitles_exist, external_srt_exists)
+            if not subtitle_swears:
+                print("##########\nNo F-words found in subtitles. Exiting gracefully.\n##########")
+                continue
 
         # Extract audio from video
         audio_only_file = extract_audio(video_file, audio_codec, bit_rate)
@@ -280,7 +311,7 @@ def main():
         # Transcribe audio to text and obtain timestamps
         swears = transcribe_audio(mp3_audio_file)
 
-         # Check if no F-words were found
+        # Check if no F-words were found
         if not swears:
             print("##########\nNo F-words found. Exiting gracefully.\n##########")
             remove_int_files(audio_only_file, mp3_audio_file)
@@ -288,6 +319,10 @@ def main():
 
         # Mute audio at specified timestamps to "defuse" the f-bombs
         defused_audio_file = mute_audio(audio_only_file, swears, audio_codec, bit_rate)
+
+        # Compare the transcription with subtitles if they exist
+        #if subtitles:
+        #    compare_with_subtitles(swears, subtitles)
 
         # Append the desired suffix and the original extension to the base name
         directory, filename = os.path.split(video_file)
@@ -301,6 +336,7 @@ def main():
 
         # Remove all intermediate files
         remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, video_file)
+
 
 if __name__ == "__main__":
     main()
