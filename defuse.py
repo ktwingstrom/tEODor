@@ -7,39 +7,45 @@ import time
 import torch
 import pysrt
 import re
+import time
+from tqdm import tqdm
 
 # Function to get info from file to figure out the input codec for the audio stream
 def get_info(video_file):
     print("##########\nGetting audio and subtitle info from video file...\n##########")
+    
     # Run ffprobe command to get information about the audio and subtitle streams
-    ffprobe_cmd = ['ffprobe', '-v', 'error', '-select_streams', 's', '-show_entries', 'stream=index:stream_tags=NAME:stream=codec_name:stream=bit_rate', '-of', 'json', video_file]
+    ffprobe_cmd = [
+        'ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries',
+        'stream=codec_name,bit_rate', '-of', 'json', video_file
+    ]
     result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
 
-    audio_codec = 'aac'
-    bit_rate = '320000'
+    audio_codec = 'aac'  # Default value if codec is not found
+    bit_rate = '320000'  # Default bit rate
     subtitles_exist = False
 
-    # First check to see if the video file has been edited before:
     try:
         streams_info = json.loads(result.stdout)['streams']
-        # Check if any stream has the specified name
+        # Iterate over the streams and identify the first audio stream
         for stream in streams_info:
-            if 'tags' in stream and 'NAME' in stream['tags'] and stream['tags']['NAME'] == 'Defused (CLEAN) Track':
-                print("Error: Found an existing audio stream with the name 'Defused (CLEAN) Track'. Exiting the script.")
-                exit()
-
-        # Extract audio codec and bit rate
-        for stream in streams_info:
-            if 'codec_type' in stream and stream['codec_type'] == 'audio':
-                audio_codec = stream.get('codec_name', audio_codec)
+            if 'codec_name' in stream:
+                audio_codec = stream['codec_name']
                 bit_rate = stream.get('bit_rate', bit_rate)
+                break  # Stop after finding the first audio stream
 
-            # Check for subtitle stream
-            if stream.get('codec_type') == 'subtitle' or 'codec_name' in stream and 'sub' in stream['codec_name'].lower():
-                subtitles_exist = True
+        # Check for subtitle streams
+        ffprobe_subs_cmd = [
+            'ffprobe', '-v', 'error', '-select_streams', 's', '-show_entries',
+            'stream=index', '-of', 'json', video_file
+        ]
+        result_subs = subprocess.run(ffprobe_subs_cmd, capture_output=True, text=True)
+        subtitles_exist = 'streams' in json.loads(result_subs.stdout)
 
     except json.JSONDecodeError:
         print("Error: Failed to parse stream information JSON.")
+    except Exception as e:
+        print(f"Error: {e}")
 
     if result.returncode != 0:
         print("Error: Failed to get stream information, defaulting to 'aac' codec at 320kbps.")
@@ -54,6 +60,7 @@ def get_info(video_file):
     print(f"##########\nExternal SRT Subtitle File Exists: {external_srt_exists}\n##########")
 
     return audio_codec, bit_rate, subtitles_exist, external_srt_exists
+
 
 def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
     print("##########\nExtracting subtitles from video file...\n##########")
@@ -82,22 +89,37 @@ def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
 
     return subtitle_swears
 
-
 def extract_audio(video_file, audio_codec, bit_rate):
     print("##########\nExtracting audio from video file...\n##########")
-    # Use the ext that relates to the codec;
-    # Append a dot before the audio codec value to create the extension
-    audio_extension = f".{audio_codec}"
 
-    # Change the extension of video_file to audio_extension
-    base_name, _ = os.path.splitext(video_file)
-    audio_file = base_name + "-AUDIO" + audio_extension
+    # Determine the appropriate file extension and codec based on the audio type
+    if audio_codec == 'dts':
+        audio_extension = ".wav"
+        audio_codec_ffmpeg = "pcm_s16le"  # FFmpeg codec for WAV
+        # Command to extract DTS as WAV
+        cmd = [
+            'ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec_ffmpeg,
+            '-ar', '16000', '-ac', '1', os.path.splitext(video_file)[0] + audio_extension
+        ]
+    elif audio_codec == 'aac':
+        audio_extension = ".aac"
+        audio_codec_ffmpeg = "copy"  # Direct copy without re-encoding for AAC
+        # Command to extract AAC as AAC
+        cmd = [
+            'ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec_ffmpeg,
+            '-strict', '-2', os.path.splitext(video_file)[0] + audio_extension
+        ]
+    else:
+        audio_extension = f".{audio_codec}"
+        audio_file =  os.path.splitext(video_file)[0] + audio_extension
+        cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', 'copy', '-strict', '-2', audio_file]
 
-    # Use the determined audio codec in the ffmpeg command
-    cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', 'copy', '-strict', '-2', audio_file]
-    #cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec, '-b:a', bit_rate, '-strict', '-2', audio_file]
+    # Execute the FFmpeg command
     subprocess.run(cmd, text=True)
-    return audio_file
+
+    # Return the path to the extracted audio file
+    return os.path.splitext(video_file)[0] + audio_extension
+
 
 def convert_to_mp3(audio_file):
     print("##########\nConverting audio to MP3 format...\n##########")
@@ -112,50 +134,36 @@ def convert_to_mp3(audio_file):
     return mp3_audio_file
 
 # Function to transcribe audio to text using SpeechRecognition
-def transcribe_audio(mp3_audio_file):
-
-    # Check if cuda is available
+def transcribe_audio(audio_file):
+    # Check if CUDA is available
     print(f"##########\nCuda available? {torch.cuda.is_available()}\n##########")
     print("##########\nTranscribing audio into text to find F-words...\n##########")
 
+    # Load the Whisper model
+    # Show a progress bar during model loading
+    with tqdm(total=100, desc="Loading Whisper model", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
+        model = whisper.load_model("base")
+        for _ in range(100):
+            pbar.update(1)
+            time.sleep(0.01)  # Simulate loading
+    print("Whisper Model Loaded.  Begin Transcription...")
+
+    # Show a progress bar during transcription (simulated, actual progress not possible)
+    with tqdm(total=100, desc="Transcribing audio", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
+        result = model.transcribe(audio_file, word_timestamps=True)
+        for _ in range(100):
+            pbar.update(1)
+            time.sleep(0.05)  # Simulate progress
     # Measure the start time
     start_time = time.time()
 
-    model = whisper.load_model("base")
-    result = model.transcribe(mp3_audio_file, word_timestamps="True")
+    # Run the transcription
+    result = model.transcribe(audio_file, word_timestamps=True)
 
     # Measure the end time
     end_time = time.time()
-
-    # Calculate the duration
     duration = end_time - start_time
     print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
-
-    # Extract transcribed text and corresponding timestamps
-    transcribed_text = result["text"]
-
-    # Determine the filename for the transcription file
-    base_name = os.path.basename(mp3_audio_file)
-    filename, _ = os.path.splitext(base_name)
-    filename_parts = filename.split('.')
-
-    # This section is to name the transcription and segments file. Uncomment to use.
-    # Find the index of the first occurrence of 'S' followed by a number
-    season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
-    if season_index is not None:
-        filename_prefix = '.'.join(filename_parts[:season_index+1])
-    else:
-        filename_prefix = filename
-
-    # Write transcription to a text file for troubleshooting
-    #transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
-    #with open(transcription_file, 'w') as file:
-    #    file.write(transcribed_text)
-
-    # Write segments to a JSON file for troubleshooting
-    #segments_file = f"{filename_prefix}-SEGMENTS.json"
-    #with open(segments_file, 'w') as file:
-    #    json.dump(result['segments'], file, indent=4)
 
     # pull segments from results
     segments = result['segments']
@@ -177,9 +185,9 @@ def transcribe_audio(mp3_audio_file):
             # Do something with the word, start, and end values
             if "fuck" in word.lower():
                 swear_list.append((word, start, end))
-                print(f"Word: {word}, Start: {start}, End: {end}")
     print(f"##########\nTotal F-words: {len(swear_list)}\n##########")
     return swear_list
+
 
 def compare_with_subtitles(transcribed_text, subtitle_file):
     print("##########\nComparing transcription with subtitles...\n##########")
@@ -267,9 +275,11 @@ def main():
     # Get user input for the video files
     parser = argparse.ArgumentParser(description='Process video files and mute profanity.')
     parser.add_argument('-i', '--input', nargs='+', help='Input video files', required=True)
+    parser.add_argument('--ignore-subtitles', action='store_true', help='Ignore subtitles check')
     args = parser.parse_args()
 
     video_files = args.input
+    ignore_subtitles = args.ignore_subtitles
 
     # Loop through each input file
     for video_file in video_files:
@@ -296,7 +306,7 @@ def main():
         audio_codec, bit_rate, subtitles_exist, external_srt_exists = get_info(video_file)
 
         # Extract subtitles if they exist, and if there are no swears exit. 
-        if subtitles_exist or external_srt_exists:
+        if not ignore_subtitles and (subtitles_exist or external_srt_exists):
             subtitle_swears = extract_subtitles(video_file, subtitles_exist, external_srt_exists)
             if not subtitle_swears:
                 print("##########\nNo F-words found in subtitles. Exiting gracefully.\n##########")
@@ -310,11 +320,12 @@ def main():
 
         # Transcribe audio to text and obtain timestamps
         swears = transcribe_audio(mp3_audio_file)
+        #swears = transcribe_audio(audio_only_file)
 
         # Check if no F-words were found
         if not swears:
             print("##########\nNo F-words found. Exiting gracefully.\n##########")
-            remove_int_files(audio_only_file, mp3_audio_file)
+            remove_int_files(audio_only_file)
             continue
 
         # Mute audio at specified timestamps to "defuse" the f-bombs

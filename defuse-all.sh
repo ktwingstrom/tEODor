@@ -31,6 +31,6 @@ find "$directory" -type f \( -iname "*.mp4" -o -iname "*.avi" -o -iname "*.mkv" 
     for video_file do
         # Execute the defuse command for each video file
         echo "Video File: $video_file"
-        python3 /Users/kevint/Documents/scripts/tEODor/defuse.py -i "$video_file"
+        python3 ~/scripts/tEODor/defuse-all.sh -i "$video_file"
     done
 ' sh {} +
