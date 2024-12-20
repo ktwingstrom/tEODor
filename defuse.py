@@ -96,7 +96,6 @@ def extract_audio(video_file, audio_codec, bit_rate):
     if audio_codec == 'dts':
         audio_extension = ".wav"
         audio_codec_ffmpeg = "pcm_s16le"  # FFmpeg codec for WAV
-        # Command to extract DTS as WAV
         cmd = [
             'ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec_ffmpeg,
             '-ar', '16000', '-ac', '1', os.path.splitext(video_file)[0] + audio_extension
@@ -104,22 +103,28 @@ def extract_audio(video_file, audio_codec, bit_rate):
     elif audio_codec == 'aac':
         audio_extension = ".aac"
         audio_codec_ffmpeg = "copy"  # Direct copy without re-encoding for AAC
-        # Command to extract AAC as AAC
         cmd = [
             'ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec_ffmpeg,
             '-strict', '-2', os.path.splitext(video_file)[0] + audio_extension
         ]
+    elif audio_codec == 'vorbis':
+        audio_extension = ".ogg"  # Change to .ogg for Vorbis
+        cmd = [
+            'ffmpeg', '-i', video_file, '-vn', '-acodec', 'copy',
+            os.path.splitext(video_file)[0] + audio_extension
+        ]
     else:
         audio_extension = f".{audio_codec}"
-        audio_file =  os.path.splitext(video_file)[0] + audio_extension
-        cmd = ['ffmpeg', '-i', video_file, '-vn', '-acodec', 'copy', '-strict', '-2', audio_file]
+        cmd = [
+            'ffmpeg', '-i', video_file, '-vn', '-acodec', 'copy', 
+            '-strict', '-2', os.path.splitext(video_file)[0] + audio_extension
+        ]
 
     # Execute the FFmpeg command
     subprocess.run(cmd, text=True)
 
     # Return the path to the extracted audio file
     return os.path.splitext(video_file)[0] + audio_extension
-
 
 def convert_to_mp3(audio_file):
     print("##########\nConverting audio to MP3 format...\n##########")
@@ -134,60 +139,47 @@ def convert_to_mp3(audio_file):
     return mp3_audio_file
 
 # Function to transcribe audio to text using SpeechRecognition
-def transcribe_audio(audio_file):
+def transcribe_audio(audio_file, output_transcription=False):
     # Check if CUDA is available
     print(f"##########\nCuda available? {torch.cuda.is_available()}\n##########")
     print("##########\nTranscribing audio into text to find F-words...\n##########")
 
     # Load the Whisper model
-    # Show a progress bar during model loading
     with tqdm(total=100, desc="Loading Whisper model", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
         model = whisper.load_model("base")
         for _ in range(100):
             pbar.update(1)
-            time.sleep(0.01)  # Simulate loading
-    print("Whisper Model Loaded.  Begin Transcription...")
+            time.sleep(0.01)
 
-    # Show a progress bar during transcription (simulated, actual progress not possible)
+    # Transcribe the audio
     with tqdm(total=100, desc="Transcribing audio", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
         result = model.transcribe(audio_file, word_timestamps=True)
         for _ in range(100):
             pbar.update(1)
-            time.sleep(0.05)  # Simulate progress
-    # Measure the start time
-    start_time = time.time()
+            time.sleep(0.05)
 
-    # Run the transcription
-    result = model.transcribe(audio_file, word_timestamps=True)
+    transcription_text = result['text']
+    print("##########\nTranscription Completed\n##########")
+    
+    # If output_transcription is True, save to a file
+    if output_transcription:
+        transcription_file = os.path.splitext(audio_file)[0] + "_transcription.txt"
+        with open(transcription_file, 'w', encoding='utf-8') as file:
+            file.write(transcription_text)
+        print(f"##########\nTranscription saved to: {transcription_file}\n##########")
 
-    # Measure the end time
-    end_time = time.time()
-    duration = end_time - start_time
-    print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
-
-    # pull segments from results
-    segments = result['segments']
-
-    # Instantiate empty list
+    # Process swear words
     swear_list = []
-
-    for segment in segments:
-        # Access the 'words' list within the segment
-        words_list = segment['words']
-
-        # Iterate over the elements in the 'words' list
-        for word_obj in words_list:
-            # Access the 'word', 'start', and 'end' elements within each word object
+    for segment in result['segments']:
+        for word_obj in segment['words']:
             word = word_obj['word']
             start = word_obj['start']
             end = word_obj['end'] + 0.1
-
-            # Do something with the word, start, and end values
-            if "fuck" in word.lower():
+            if word.lower() in ["fuck", "nigger"]:
                 swear_list.append((word, start, end))
-    print(f"##########\nTotal F-words: {len(swear_list)}\n##########")
-    return swear_list
 
+    print(f"##########\nTotal swear words: {len(swear_list)}\n##########")
+    return swear_list
 
 def compare_with_subtitles(transcribed_text, subtitle_file):
     print("##########\nComparing transcription with subtitles...\n##########")
@@ -250,7 +242,10 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
 
     # Set up filename for muted file
     base_name, _ = os.path.splitext(audio_only_file)
-    defused_audio_file = base_name + "-DEFUSED-AUDIO" + "." + audio_codec
+    if audio_codec == 'vorbis':
+        defused_audio_file = base_name + "-DEFUSED-AUDIO.ogg"
+    else:
+        defused_audio_file = base_name + "-DEFUSED-AUDIO." + audio_codec
 
     # Construct ffmpeg command with a complex filtergraph
     print("##########\nMuting all F-words...\n##########")
@@ -270,16 +265,17 @@ def remove_int_files(*file_paths):
             print(f"##########\nDeleted: {file_path}\n##########")
         else:
             print(f"##########\nFile not found: {file_path}\n##########")
-
 def main():
     # Get user input for the video files
     parser = argparse.ArgumentParser(description='Process video files and mute profanity.')
     parser.add_argument('-i', '--input', nargs='+', help='Input video files', required=True)
     parser.add_argument('--ignore-subtitles', action='store_true', help='Ignore subtitles check')
+    parser.add_argument('--output-transcription', action='store_true', help='Output transcription to a file')
     args = parser.parse_args()
 
     video_files = args.input
     ignore_subtitles = args.ignore_subtitles
+    output_transcription = args.output_transcription
 
     # Loop through each input file
     for video_file in video_files:
@@ -319,8 +315,7 @@ def main():
         mp3_audio_file = convert_to_mp3(audio_only_file)
 
         # Transcribe audio to text and obtain timestamps
-        swears = transcribe_audio(mp3_audio_file)
-        #swears = transcribe_audio(audio_only_file)
+        swears = transcribe_audio(mp3_audio_file, output_transcription)
 
         # Check if no F-words were found
         if not swears:
