@@ -17,12 +17,13 @@ def get_info(video_file):
     # Run ffprobe command to get information about the audio and subtitle streams
     ffprobe_cmd = [
         'ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries',
-        'stream=codec_name,bit_rate', '-of', 'json', video_file
+        'stream=codec_name,bit_rate,duration', '-of', 'json', video_file
     ]
     result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
 
     audio_codec = 'aac'  # Default value if codec is not found
     bit_rate = '320000'  # Default bit rate
+    duration = None       # Default duration
     subtitles_exist = False
 
     try:
@@ -32,6 +33,7 @@ def get_info(video_file):
             if 'codec_name' in stream:
                 audio_codec = stream['codec_name']
                 bit_rate = stream.get('bit_rate', bit_rate)
+                duration = stream.get('duration')
                 break  # Stop after finding the first audio stream
 
         # Check for subtitle streams
@@ -50,7 +52,7 @@ def get_info(video_file):
     if result.returncode != 0:
         print("Error: Failed to get stream information, defaulting to 'aac' codec at 320kbps.")
     
-    print(f"##########\nAudio Codec & Bitrate from source:\nCodec: {audio_codec}\nBitrate: {bit_rate}\n##########")
+    print(f"##########\nAudio Codec & Bitrate from source:\nCodec: {audio_codec}\nBitrate: {bit_rate}\nDuration: {duration} seconds\n##########")
     print(f"##########\nSubtitles Exist in Video File: {subtitles_exist}\n##########")
 
     # Check for external SRT subtitle file
@@ -59,7 +61,7 @@ def get_info(video_file):
     external_srt_exists = os.path.isfile(subtitle_file)
     print(f"##########\nExternal SRT Subtitle File Exists: {external_srt_exists}\n##########")
 
-    return audio_codec, bit_rate, subtitles_exist, external_srt_exists
+    return audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists
 
 
 def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
@@ -89,7 +91,7 @@ def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
 
     return subtitle_swears
 
-def extract_audio(video_file, audio_codec, bit_rate):
+def extract_audio(video_file, audio_codec, bit_rate, duration):
     print("##########\nExtracting audio from video file...\n##########")
 
     # Determine the appropriate file extension and codec based on the audio type
@@ -120,19 +122,29 @@ def extract_audio(video_file, audio_codec, bit_rate):
             '-strict', '-2', os.path.splitext(video_file)[0] + audio_extension
         ]
 
+    if duration:
+        cmd.insert(-1, '-t')  # Add '-t' before the output file
+        cmd.insert(-1, str(duration))
+
     # Execute the FFmpeg command
     subprocess.run(cmd, text=True)
 
     # Return the path to the extracted audio file
     return os.path.splitext(video_file)[0] + audio_extension
 
-def convert_to_mp3(audio_file):
+def convert_to_mp3(audio_file, duration):
     print("##########\nConverting audio to MP3 format...\n##########")
     # Append ".mp3" extension to the audio file
     mp3_audio_file = os.path.splitext(audio_file)[0] + ".mp3"
 
     # Use ffmpeg command to convert audio to MP3 format at 256kbps
     cmd = ['ffmpeg', '-i', audio_file, '-vn', '-acodec', 'libmp3lame', '-b:a', '256k', mp3_audio_file]
+
+    if duration:
+        cmd.insert(-1, '-t')  # Add '-t' before the output file
+        cmd.insert(-1, str(duration))
+
+# Execute command
     subprocess.run(cmd, text=True)
 
     print("##########\nAudio conversion to MP3 completed.\n##########")
@@ -175,7 +187,7 @@ def transcribe_audio(audio_file, output_transcription=False):
             word = word_obj['word']
             start = word_obj['start']
             end = word_obj['end'] + 0.1
-            if word.lower() in ["fuck", "nigger"]:
+            if any(swear in word.lower() for swear in ["fuck", "nigger"]):
                 swear_list.append((word, start, end))
 
     print(f"##########\nTotal swear words: {len(swear_list)}\n##########")
@@ -299,7 +311,7 @@ def main():
             continue
 
         # Run a probe command on the video file to get all the codec, bitrate, and subtitle info we need first:
-        audio_codec, bit_rate, subtitles_exist, external_srt_exists = get_info(video_file)
+        audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists = get_info(video_file)
 
         # Extract subtitles if they exist, and if there are no swears exit. 
         if not ignore_subtitles and (subtitles_exist or external_srt_exists):
@@ -309,10 +321,10 @@ def main():
                 continue
 
         # Extract audio from video
-        audio_only_file = extract_audio(video_file, audio_codec, bit_rate)
+        audio_only_file = extract_audio(video_file, audio_codec, bit_rate, duration)
 
         # Convert audio to mp3 for better Whisper compatibility
-        mp3_audio_file = convert_to_mp3(audio_only_file)
+        mp3_audio_file = convert_to_mp3(audio_only_file, duration)
 
         # Transcribe audio to text and obtain timestamps
         swears = transcribe_audio(mp3_audio_file, output_transcription)
@@ -340,9 +352,12 @@ def main():
         cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
         subprocess.run(cmd)
 
-        # Remove all intermediate files
-        remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, video_file)
-
+        if os.path.exists(clean_video_file):
+            print(f"##########\nSuccessfully created clean video file: {clean_video_file}\n##########")
+            remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, video_file)
+        else:
+            print(f"##########\nFailed to create clean video file: {clean_video_file}. Skipping original file deletion.\n##########")
+            remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file)  # Do not delete the original file
 
 if __name__ == "__main__":
     main()
