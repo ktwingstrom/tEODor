@@ -13,55 +13,86 @@ from tqdm import tqdm
 # Function to get info from file to figure out the input codec for the audio stream
 def get_info(video_file):
     print("##########\nGetting audio and subtitle info from video file...\n##########")
-    
-    # Run ffprobe command to get information about the audio and subtitle streams
+
+    # 1) FFprobe to find all audio streams (and their tags)
     ffprobe_cmd = [
-        'ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries',
-        'stream=codec_name,bit_rate,duration', '-of', 'json', video_file
+        'ffprobe',
+        '-v', 'error',
+        '-select_streams', 'a',
+        '-show_entries', 'stream=index:stream_tags=language:stream=codec_name,bit_rate,duration',
+        '-of', 'json',
+        video_file
     ]
     result = subprocess.run(ffprobe_cmd, capture_output=True, text=True)
 
-    audio_codec = 'aac'  # Default value if codec is not found
-    bit_rate = '320000'  # Default bit rate
-    duration = None       # Default duration
+    # Default values
+    audio_stream_index = None
+    audio_codec = 'aac'
+    bit_rate = '320000'
+    duration = None
     subtitles_exist = False
 
-    try:
-        streams_info = json.loads(result.stdout)['streams']
-        # Iterate over the streams and identify the first audio stream
-        for stream in streams_info:
-            if 'codec_name' in stream:
-                audio_codec = stream['codec_name']
-                bit_rate = stream.get('bit_rate', bit_rate)
-                duration = stream.get('duration')
-                break  # Stop after finding the first audio stream
+    # 2) Parse the JSON
+    if result.returncode == 0:
+        try:
+            data = json.loads(result.stdout)
+            # data['streams'] should be a list of audio streams
+            audio_streams = data.get('streams', [])
 
-        # Check for subtitle streams
-        ffprobe_subs_cmd = [
-            'ffprobe', '-v', 'error', '-select_streams', 's', '-show_entries',
-            'stream=index', '-of', 'json', video_file
-        ]
-        result_subs = subprocess.run(ffprobe_subs_cmd, capture_output=True, text=True)
-        subtitles_exist = 'streams' in json.loads(result_subs.stdout)
+            # Try to find an English track first
+            for stream in audio_streams:
+                tags = stream.get('tags', {})
+                language = tags.get('language', '').lower()
+                if language == 'eng':
+                    audio_stream_index = stream.get('index')
+                    audio_codec = stream.get('codec_name', audio_codec)
+                    bit_rate = stream.get('bit_rate', bit_rate)
+                    duration = stream.get('duration', duration)
+                    break
 
-    except json.JSONDecodeError:
-        print("Error: Failed to parse stream information JSON.")
-    except Exception as e:
-        print(f"Error: {e}")
+            # If we didn't find English, just grab the first audio stream
+            if audio_stream_index is None and audio_streams:
+                first_stream = audio_streams[0]
+                audio_stream_index = first_stream.get('index')
+                audio_codec = first_stream.get('codec_name', audio_codec)
+                bit_rate = first_stream.get('bit_rate', bit_rate)
+                duration = first_stream.get('duration', duration)
 
-    if result.returncode != 0:
-        print("Error: Failed to get stream information, defaulting to 'aac' codec at 320kbps.")
-    
-    print(f"##########\nAudio Codec & Bitrate from source:\nCodec: {audio_codec}\nBitrate: {bit_rate}\nDuration: {duration} seconds\n##########")
+        except json.JSONDecodeError:
+            print("Error: Failed to parse stream information JSON.")
+    else:
+        print("Error: Failed to get stream information via ffprobe.")
+
+    # 3) Check for subtitle streams
+    ffprobe_subs_cmd = [
+        'ffprobe', '-v', 'error',
+        '-select_streams', 's',
+        '-show_entries', 'stream=index',
+        '-of', 'json',
+        video_file
+    ]
+    result_subs = subprocess.run(ffprobe_subs_cmd, capture_output=True, text=True)
+    if result_subs.returncode == 0:
+        subs_data = json.loads(result_subs.stdout)
+        subtitles_exist = 'streams' in subs_data and len(subs_data['streams']) > 0
+    else:
+        subtitles_exist = False
+
+    # 4) Print debugging info
+    print(f"##########\nAudio Stream Index Chosen: {audio_stream_index}")
+    print(f"Audio Codec: {audio_codec}")
+    print(f"Bitrate: {bit_rate}")
+    print(f"Duration: {duration} seconds\n##########")
     print(f"##########\nSubtitles Exist in Video File: {subtitles_exist}\n##########")
 
-    # Check for external SRT subtitle file
+    # 5) Check for external SRT subtitle file
     base_name, _ = os.path.splitext(video_file)
     subtitle_file = base_name + ".srt"
     external_srt_exists = os.path.isfile(subtitle_file)
     print(f"##########\nExternal SRT Subtitle File Exists: {external_srt_exists}\n##########")
 
-    return audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists
+    # 6) Return everything needed
+    return audio_stream_index, audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists
 
 
 def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
@@ -91,46 +122,70 @@ def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
 
     return subtitle_swears
 
-def extract_audio(video_file, audio_codec, bit_rate, duration):
+def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
     print("##########\nExtracting audio from video file...\n##########")
+    
+    # Small lookup table for each codec:
+    # - ext: file extension
+    # - ffmpeg_codec: the codec name to use in -acodec
+    # - extra_args: any additional arguments needed
+    codec_map = {
+        'dts': {
+            'ext': '.wav',
+            'ffmpeg_codec': 'pcm_s16le',
+            'extra_args': ['-ar', '16000', '-ac', '1']
+        },
+        'aac': {
+            'ext': '.aac',
+            'ffmpeg_codec': 'copy',
+            'extra_args': ['-strict', '-2']
+        },
+        'vorbis': {
+            'ext': '.ogg',
+            'ffmpeg_codec': 'copy',
+            'extra_args': []
+        }
+    }
 
-    # Determine the appropriate file extension and codec based on the audio type
-    if audio_codec == 'dts':
-        audio_extension = ".wav"
-        audio_codec_ffmpeg = "pcm_s16le"  # FFmpeg codec for WAV
-        cmd = [
-            'ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec_ffmpeg,
-            '-ar', '16000', '-ac', '1', os.path.splitext(video_file)[0] + audio_extension
-        ]
-    elif audio_codec == 'aac':
-        audio_extension = ".aac"
-        audio_codec_ffmpeg = "copy"  # Direct copy without re-encoding for AAC
-        cmd = [
-            'ffmpeg', '-i', video_file, '-vn', '-acodec', audio_codec_ffmpeg,
-            '-strict', '-2', os.path.splitext(video_file)[0] + audio_extension
-        ]
-    elif audio_codec == 'vorbis':
-        audio_extension = ".ogg"  # Change to .ogg for Vorbis
-        cmd = [
-            'ffmpeg', '-i', video_file, '-vn', '-acodec', 'copy',
-            os.path.splitext(video_file)[0] + audio_extension
-        ]
+    # Decide which codec settings to use
+    if audio_codec in codec_map:
+        chosen_ext = codec_map[audio_codec]['ext']
+        chosen_codec = codec_map[audio_codec]['ffmpeg_codec']
+        extra_args = codec_map[audio_codec]['extra_args']
     else:
-        audio_extension = f".{audio_codec}"
-        cmd = [
-            'ffmpeg', '-i', video_file, '-vn', '-acodec', 'copy', 
-            '-strict', '-2', os.path.splitext(video_file)[0] + audio_extension
-        ]
+        # Default: just copy with extension set to the codec name
+        chosen_ext = f".{audio_codec}"
+        chosen_codec = 'copy'
+        extra_args = ['-strict', '-2']
 
+    output_audio = os.path.splitext(video_file)[0] + chosen_ext
+
+    # Build a single FFmpeg command
+    cmd = [
+        'ffmpeg',
+        '-i', video_file,
+        '-map', f'0:{audio_index}',    # <-- use the chosen audio track index
+        '-vn',                         # no video
+        '-acodec', chosen_codec,
+        *extra_args
+    ]
+
+    # If a duration was found, limit to that duration
     if duration:
-        cmd.insert(-1, '-t')  # Add '-t' before the output file
-        cmd.insert(-1, str(duration))
+        cmd.extend(['-t', str(duration)])
+
+    # Finally, add the output filename
+    cmd.append(output_audio)
+
+    # Print to debug if you want
+    # print("FFmpeg Command:", " ".join(cmd))
 
     # Execute the FFmpeg command
     subprocess.run(cmd, text=True)
 
     # Return the path to the extracted audio file
-    return os.path.splitext(video_file)[0] + audio_extension
+    return output_audio
+
 
 def convert_to_mp3(audio_file, duration):
     print("##########\nConverting audio to MP3 format...\n##########")
@@ -311,7 +366,8 @@ def main():
             continue
 
         # Run a probe command on the video file to get all the codec, bitrate, and subtitle info we need first:
-        audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists = get_info(video_file)
+        audio_index, audio_codec, bit_rate, duration, subs_exist, external_srt_exists = get_info(video_file)
+
 
         # Extract subtitles if they exist, and if there are no swears exit. 
         if not ignore_subtitles and (subtitles_exist or external_srt_exists):
@@ -321,7 +377,7 @@ def main():
                 continue
 
         # Extract audio from video
-        audio_only_file = extract_audio(video_file, audio_codec, bit_rate, duration)
+        audio_only_file = extract_audio(video_file, audio_index, audio_codec, bit_rate, duration) 
 
         # Convert audio to mp3 for better Whisper compatibility
         mp3_audio_file = convert_to_mp3(audio_only_file, duration)
