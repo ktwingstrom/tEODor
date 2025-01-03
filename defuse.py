@@ -260,16 +260,25 @@ def convert_to_mp3(audio_file, duration):
 
 # Function to transcribe audio to text using SpeechRecognition
 def transcribe_audio(audio_file, output_transcription=False):
-    # Check if CUDA is available
-    print(f"##########\nCuda available? {torch.cuda.is_available()}\n##########")
     print("##########\nTranscribing audio into text to find F-words...\n##########")
+
+    # Check if CUDA is available, and set it 
+    if torch.cuda.is_available():
+        print("##########\nCUDA is available: Using GPU!\n##########")
+        device = "cuda"
+    else:
+        print("##########\nCUDA not available: Using CPU.\n##########")
+        device = "cpu"
 
     # Load the Whisper model
     with tqdm(total=100, desc="Loading Whisper model", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
-        model = whisper.load_model("base")
+        model = whisper.load_model("base", device=device)
         for _ in range(100):
             pbar.update(1)
             time.sleep(0.01)
+        
+    if hasattr(model, "device"):
+        print(f"Model loaded on device: {model.device}")
 
     # Transcribe the audio
     with tqdm(total=100, desc="Transcribing audio", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
@@ -416,10 +425,6 @@ def main():
 
         # Run a probe command on the video file to get all the codec, bitrate, and subtitle info we need first:
         audio_index, audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists = get_info(video_file)
-
-        # If the vorbis codec is detected, change it to use the libvorbis library instead which supports 6 channels instead of just 2.
-        if audio_codec == 'vorbis':
-            audio_codec = 'libvorbis'
 
         # Extract subtitles if they exist, and if there are no swears exit. 
         if not ignore_subtitles and (subtitles_exist or external_srt_exists):
