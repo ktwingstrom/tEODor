@@ -190,12 +190,12 @@ def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
         'vorbis': {
             "ext": ".wav",
             "ffmpeg_codec": "pcm_s16le",
-            "extra_args": ["-ar", "16000", "-ac", "1"]
+            "extra_args": []
         },
         'libvorbis': {
             "ext": ".wav",
             "ffmpeg_codec": "pcm_s16le",
-            "extra_args": ["-ar", "16000", "-ac", "1"]
+            "extra_args": []
         }
         # Add more entries here if you want to handle EAC3, etc.
     }
