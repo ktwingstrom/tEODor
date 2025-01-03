@@ -142,7 +142,7 @@ def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
         },
         'vorbis': {
             'ext': '.ogg',
-            'ffmpeg_codec': 'copy',
+            'ffmpeg_codec': 'libvorbis',
             'extra_args': []
         }
     }
