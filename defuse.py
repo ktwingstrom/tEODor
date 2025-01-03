@@ -22,8 +22,8 @@ AUDIO_EXTENSION_MAP = {
     'flac':      'flac',
     'opus':      'opus',
     'libopus':   'opus',
-    'vorbis':    'ogg',
-    'libvorbis': 'ogg',
+    'vorbis':    'wav',
+    'libvorbis': 'wav',
     'wav':       'wav',
     'pcm_s16le': 'wav',
     'pcm_s24le': 'wav'
