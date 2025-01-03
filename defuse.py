@@ -495,7 +495,7 @@ def main():
             continue
 
         # Mute audio at specified timestamps to "defuse" the f-bombs
-        defused_audio_file = mute_audio(audio_only_file, swears, audio_codec, bit_rate)
+        defused_audio_file = mute_audio(audio_only_file, swears)
 
         # Compare the transcription with subtitles if they exist
         #if subtitles:
