@@ -286,6 +286,29 @@ def compare_with_subtitles(transcribed_text, subtitle_file):
 
     print("##########\nComparison complete.\n##########")
 
+def get_defused_filename(base_name, audio_codec):
+    audio_extension_map = {
+        'aac':       'aac',
+        'ac3':       'ac3',
+        'eac3':      'eac3',
+        'dts':       'dts',
+        'mp3':       'mp3',
+        'libmp3lame': 'mp3',
+        'flac':      'flac',
+        'opus':      'opus',
+        'libopus':   'opus',
+        'vorbis':    'ogg',
+        'libvorbis': 'ogg',
+        'wav':       'wav',
+        'pcm_s16le': 'wav',
+        'pcm_s24le': 'wav'
+    }
+
+    # If audio_codec is found in the dictionary, use that; otherwise, fall back to using the codec name itself
+    ext = audio_extension_map.get(audio_codec, audio_codec)
+    return f"{base_name}-DEFUSED-AUDIO.{ext}"
+
+
 # Function to mute audio at specified timestamps using FFmpeg
 def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
     # Initialize an empty list to store filter expressions for muting
@@ -309,10 +332,7 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
 
     # Set up filename for muted file
     base_name, _ = os.path.splitext(audio_only_file)
-    if audio_codec == 'vorbis':
-        defused_audio_file = base_name + "-DEFUSED-AUDIO.ogg"
-    else:
-        defused_audio_file = base_name + "-DEFUSED-AUDIO." + audio_codec
+    defused_audio_file = get_defused_filename(base_name, audio_codec) # <-- Defines the extension to use based on codec plus basename
 
     # Construct ffmpeg command with a complex filtergraph
     print("##########\nMuting all F-words...\n##########")
