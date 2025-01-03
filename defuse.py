@@ -368,6 +368,9 @@ def main():
         # Run a probe command on the video file to get all the codec, bitrate, and subtitle info we need first:
         audio_index, audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists = get_info(video_file)
 
+        # If the vorbis codec is detected, change it to use the libvorbis library instead which supports 6 channels instead of just 2.
+        if audio_codec == 'vorbis':
+            audio_codec = 'libvorbis'
 
         # Extract subtitles if they exist, and if there are no swears exit. 
         if not ignore_subtitles and (subtitles_exist or external_srt_exists):
