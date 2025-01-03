@@ -10,6 +10,25 @@ import re
 import time
 from tqdm import tqdm
 
+
+# Map out common extensions to their codec. Used in multiple functions
+AUDIO_EXTENSION_MAP = {
+    'aac':       'aac',
+    'ac3':       'ac3',
+    'eac3':      'eac3',
+    'dts':       'dts',
+    'mp3':       'mp3',
+    'libmp3lame': 'mp3',
+    'flac':      'flac',
+    'opus':      'opus',
+    'libopus':   'opus',
+    'vorbis':    'ogg',
+    'libvorbis': 'ogg',
+    'wav':       'wav',
+    'pcm_s16le': 'wav',
+    'pcm_s24le': 'wav'
+}
+
 # Function to get info from file to figure out the input codec for the audio stream
 def get_info(video_file):
     print("##########\nGetting audio and subtitle info from video file...\n##########")
@@ -95,6 +114,36 @@ def get_info(video_file):
     return audio_stream_index, audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists
 
 
+####################################################################
+#    HELPER FUNCTIONS FOR DEFINING THE FILENAMES AND EXTENSIONS.   #
+####################################################################
+def get_audio_extension(codec_name: str) -> str:
+    """
+    Given an audio codec name, return the proper file extension.
+    If not in the map, we just return the codec_name itself.
+    """
+    return AUDIO_EXTENSION_MAP.get(codec_name, codec_name)
+
+def get_extracted_filename(video_file: str, codec_name: str) -> str:
+    """
+    For the extracted audio, we simply want <base>.<ext>.
+    E.g., "/path/video.mkv" -> "/path/video.ogg" if codec_name=libvorbis.
+    """
+    base_name, _ = os.path.splitext(video_file)
+    ext = get_audio_extension(codec_name)
+    return f"{base_name}.{ext}"
+
+def get_defused_filename(audio_file: str, codec_name: str) -> str:
+    """
+    For the muted/defused audio, we want <base>-DEFUSED-AUDIO.<ext>.
+    E.g., "/path/video.ogg" -> "/path/video-DEFUSED-AUDIO.ogg"
+    """
+    base_name, _ = os.path.splitext(audio_file)
+    ext = get_audio_extension(codec_name)
+    return f"{base_name}-DEFUSED-AUDIO.{ext}"
+
+####################################################################
+
 def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
     print("##########\nExtracting subtitles from video file...\n##########")
     base_name, _ = os.path.splitext(video_file)
@@ -125,10 +174,7 @@ def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
 def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
     print("##########\nExtracting audio from video file...\n##########")
     
-    # Small lookup table for each codec:
-    # - ext: file extension
-    # - ffmpeg_codec: the codec name to use in -acodec
-    # - extra_args: any additional arguments needed
+    # A single lookup table unifying extension, ffmpeg_codec, and extra_args
     codec_map = {
         'dts': {
             'ext': '.wav',
@@ -140,11 +186,18 @@ def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
             'ffmpeg_codec': 'copy',
             'extra_args': ['-strict', '-2']
         },
+        # If the source is 'vorbis' or 'libvorbis', we want to use the libvorbis encoder:
         'vorbis': {
             'ext': '.ogg',
             'ffmpeg_codec': 'libvorbis',
             'extra_args': []
+        },
+        'libvorbis': {
+            'ext': '.ogg',
+            'ffmpeg_codec': 'libvorbis',
+            'extra_args': []
         }
+        # Add more entries here if you want to handle EAC3, etc.
     }
 
     # Decide which codec settings to use
@@ -153,19 +206,20 @@ def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
         chosen_codec = codec_map[audio_codec]['ffmpeg_codec']
         extra_args = codec_map[audio_codec]['extra_args']
     else:
-        # Default: just copy with extension set to the codec name
+        # Fallback: just copy with extension set to the codec name
         chosen_ext = f".{audio_codec}"
         chosen_codec = 'copy'
         extra_args = ['-strict', '-2']
 
+    # Construct the output filename (e.g. "MyVideo.ogg")
     output_audio = os.path.splitext(video_file)[0] + chosen_ext
 
-    # Build a single FFmpeg command
+    # Build one FFmpeg command
     cmd = [
         'ffmpeg',
         '-i', video_file,
-        '-map', f'0:{audio_index}',    # <-- use the chosen audio track index
-        '-vn',                         # no video
+        '-map', f'0:{audio_index}',  # The chosen audio track index
+        '-vn',                       # No video
         '-acodec', chosen_codec,
         *extra_args
     ]
@@ -177,15 +231,14 @@ def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
     # Finally, add the output filename
     cmd.append(output_audio)
 
-    # Print to debug if you want
-    # print("FFmpeg Command:", " ".join(cmd))
+    # Debugging if desired:
+    # print("FFmpeg command:", " ".join(cmd))
 
-    # Execute the FFmpeg command
+    # Execute the command
     subprocess.run(cmd, text=True)
 
     # Return the path to the extracted audio file
     return output_audio
-
 
 def convert_to_mp3(audio_file, duration):
     print("##########\nConverting audio to MP3 format...\n##########")
@@ -286,29 +339,6 @@ def compare_with_subtitles(transcribed_text, subtitle_file):
 
     print("##########\nComparison complete.\n##########")
 
-def get_defused_filename(base_name, audio_codec):
-    audio_extension_map = {
-        'aac':       'aac',
-        'ac3':       'ac3',
-        'eac3':      'eac3',
-        'dts':       'dts',
-        'mp3':       'mp3',
-        'libmp3lame': 'mp3',
-        'flac':      'flac',
-        'opus':      'opus',
-        'libopus':   'opus',
-        'vorbis':    'ogg',
-        'libvorbis': 'ogg',
-        'wav':       'wav',
-        'pcm_s16le': 'wav',
-        'pcm_s24le': 'wav'
-    }
-
-    # If audio_codec is found in the dictionary, use that; otherwise, fall back to using the codec name itself
-    ext = audio_extension_map.get(audio_codec, audio_codec)
-    return f"{base_name}-DEFUSED-AUDIO.{ext}"
-
-
 # Function to mute audio at specified timestamps using FFmpeg
 def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
     # Initialize an empty list to store filter expressions for muting
@@ -330,9 +360,8 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
         for expr in filter_expressions
     )
 
-    # Set up filename for muted file
-    base_name, _ = os.path.splitext(audio_only_file)
-    defused_audio_file = get_defused_filename(base_name, audio_codec) # <-- Defines the extension to use based on codec plus basename
+    # Set up filename for muted file using helper function
+    defused_audio_file = get_defused_filename(audio_only_file, audio_codec)
 
     # Construct ffmpeg command with a complex filtergraph
     print("##########\nMuting all F-words...\n##########")
