@@ -186,16 +186,16 @@ def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
             'ffmpeg_codec': 'copy',
             'extra_args': ['-strict', '-2']
         },
-        # If the source is 'vorbis' or 'libvorbis', we want to use the libvorbis encoder:
+        # If the source is 'vorbis' or 'libvorbis', force to wav/pcm
         'vorbis': {
-            'ext': '.ogg',
-            'ffmpeg_codec': 'libvorbis',
-            'extra_args': []
+            "ext": ".wav",
+            "ffmpeg_codec": "pcm_s16le",
+            "extra_args": ["-ar", "16000", "-ac", "1"]
         },
         'libvorbis': {
-            'ext': '.ogg',
-            'ffmpeg_codec': 'libvorbis',
-            'extra_args': []
+            "ext": ".wav",
+            "ffmpeg_codec": "pcm_s16le",
+            "extra_args": ["-ar", "16000", "-ac", "1"]
         }
         # Add more entries here if you want to handle EAC3, etc.
     }
