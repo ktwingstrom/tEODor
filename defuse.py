@@ -142,6 +142,30 @@ def get_defused_filename(audio_file: str, codec_name: str) -> str:
     ext = get_audio_extension(codec_name)
     return f"{base_name}-DEFUSED-AUDIO.{ext}"
 
+def get_ac3_or_copy(audio_file: str):
+    """
+    Decide how to encode the defused audio, 
+    based on the input file extension or user logic.
+    
+    Returns: (out_codec, extra_args, defused_ext)
+    """
+    # Grab extension (lowercase, just in case)
+    _, ext = os.path.splitext(audio_file)
+    ext = ext.lower()
+    
+    # If the input is .wav => produce AC3
+    if ext == '.wav':
+        out_codec = 'ac3'
+        extra_args = []
+        defused_ext = '.ac3'
+    else:
+        # Otherwise, we’ll just keep it “copy” or revert to the old approach
+        out_codec = 'copy'
+        extra_args = []
+        defused_ext = ext  
+    
+    return out_codec, extra_args, defused_ext
+
 ####################################################################
 
 def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
@@ -349,7 +373,12 @@ def compare_with_subtitles(transcribed_text, subtitle_file):
     print("##########\nComparison complete.\n##########")
 
 # Function to mute audio at specified timestamps using FFmpeg
-def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
+def mute_audio(audio_only_file, swears):
+    """
+    Mute the specified swear words in the given audio file by applying volume=0
+    filters at the timestamps. If audio_only_file is .wav, final track is AC3;
+    otherwise, we copy the codec.
+    """
     # Initialize an empty list to store filter expressions for muting
     filter_expressions = []
 
@@ -359,27 +388,44 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
         print("Swear tuple:", swear)
         start = float(swear[1])
         end = float(swear[2])
-
-        # Define the filter expressions dynamically
         filter_expressions.append({'start': start, 'end': end})
 
-    # Construct the filter string
+    # Build the FFmpeg volume filters
     filter_string = ', '.join(
         f"volume=enable='between(t,{expr['start']},{expr['end']}):volume=0'"
         for expr in filter_expressions
     )
 
-    # Set up filename for muted file using helper function
-    defused_audio_file = get_defused_filename(audio_only_file, audio_codec)
-
-    # Construct ffmpeg command with a complex filtergraph
     print("##########\nMuting all F-words...\n##########")
     print(f"Filter String: {filter_string}")
-    cmd = ['ffmpeg', '-i', audio_only_file, '-vn', '-af', filter_string, '-c:a', audio_codec, '-b:a', bit_rate, '-strict', 'experimental', defused_audio_file]
 
-    # Execute the command
-    subprocess.run(cmd)
+    # Decide whether to encode as AC3 (if .wav) or copy otherwise
+    out_codec, extra_args, defused_ext = get_ac3_or_copy(audio_only_file)
+
+    # Construct our final DEFUSED filename
+    base_name, _ = os.path.splitext(audio_only_file)
+    defused_audio_file = f"{base_name}-DEFUSED-AUDIO{defused_ext}"
+
+    # Build the ffmpeg command
+    cmd = [
+        'ffmpeg',
+        '-i', audio_only_file,
+        '-vn',                 # No video
+        '-af', filter_string,  # The volume filters
+        '-c:a', out_codec,     # "ac3" or "copy"
+        *extra_args,           # If AC3, you can add extra args like "-b:a 640k" etc. in get_ac3_or_copy
+        defused_audio_file
+    ]
+
+    # Print or debug if you wish
+    # print("FFmpeg command:", " ".join(cmd))
+
+    # Execute the ffmpeg command
+    subprocess.run(cmd, text=True)
+
+    # Return the path to the defused audio file
     return defused_audio_file
+
 
 def remove_int_files(*file_paths):
     # Remove intermediate audio files
