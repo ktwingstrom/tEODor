@@ -366,7 +366,7 @@ def main():
             continue
 
         # Run a probe command on the video file to get all the codec, bitrate, and subtitle info we need first:
-        audio_index, audio_codec, bit_rate, duration, subs_exist, external_srt_exists = get_info(video_file)
+        audio_index, audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists = get_info(video_file)
 
 
         # Extract subtitles if they exist, and if there are no swears exit. 
