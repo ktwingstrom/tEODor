@@ -300,6 +300,9 @@ def convert_to_mp3(audio_file, duration):
 def transcribe_audio(audio_file, output_transcription=False):
     print("##########\nTranscribing audio into text to find F-words...\n##########")
 
+    # Record the start time
+    start_time = time.time()
+
     # Check if CUDA is available
     if torch.cuda.is_available():
         print("##########\nCUDA is available: Using GPU!\n##########")
@@ -325,8 +328,12 @@ def transcribe_audio(audio_file, output_transcription=False):
             pbar.update(1)
             time.sleep(0.05)
 
+    # Record the end time
+    end_time = time.time()
+
     transcription_text = result['text']
-    print("##########\nTranscription Completed\n##########")
+    transcription_time = end_time - start_time
+    print(f"##########\nTranscription Completed in {transcription_time:.2f} seconds\n##########")
     
     # If output_transcription is True, save to a file
     if output_transcription:
