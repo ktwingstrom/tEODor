@@ -7,9 +7,7 @@ import time
 import torch
 import pysrt
 import re
-import time
 from tqdm import tqdm
-
 
 # Map out common extensions to their codec. Used in multiple functions
 AUDIO_EXTENSION_MAP = {
@@ -29,7 +27,9 @@ AUDIO_EXTENSION_MAP = {
     'pcm_s24le': 'wav'
 }
 
-# Function to get info from file to figure out the input codec for the audio stream
+###############################################################################
+#                           GET INFO                                          #
+###############################################################################
 def get_info(video_file):
     print("##########\nGetting audio and subtitle info from video file...\n##########")
 
@@ -113,10 +113,9 @@ def get_info(video_file):
     # 6) Return everything needed
     return audio_stream_index, audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists
 
-
-####################################################################
-#    HELPER FUNCTIONS FOR DEFINING THE FILENAMES AND EXTENSIONS.   #
-####################################################################
+###############################################################################
+#                           HELPER FUNCTIONS                                  #
+###############################################################################
 def get_audio_extension(codec_name: str) -> str:
     """
     Given an audio codec name, return the proper file extension.
@@ -144,30 +143,34 @@ def get_defused_filename(audio_file: str, codec_name: str) -> str:
 
 def get_ac3_or_copy(audio_file: str):
     """
-    Decide how to encode the defused audio, 
-    based on the input file extension or user logic.
+    Decide how to encode the defused audio (rather than copy),
+    because filtering + copy is not allowed.
     
-    Returns: (out_codec, extra_args, defused_ext)
+    If .wav => produce AC3, 
+    else => produce AAC or AC3, whichever you prefer.
     """
-    # Grab extension (lowercase, just in case)
     _, ext = os.path.splitext(audio_file)
     ext = ext.lower()
     
     # If the input is .wav => produce AC3
     if ext == '.wav':
         out_codec = 'ac3'
-        extra_args = []
+        extra_args = ['-b:a', '384k']  # or 640k, if you prefer
         defused_ext = '.ac3'
     else:
-        # Otherwise, we’ll just keep it “copy” or revert to the old approach
-        out_codec = 'copy'
-        extra_args = []
-        defused_ext = ext  
-    
+        # Re-encode to AAC (or AC3) for everything else
+        out_codec = 'aac'
+        # If you choose AC3 for everything, just do:
+        #   out_codec = 'ac3'
+        #   defused_ext = '.ac3'
+        extra_args = ['-b:a', '256k', '-strict', 'experimental']
+        defused_ext = '.m4a'  # or '.aac', etc.
+
     return out_codec, extra_args, defused_ext
 
-####################################################################
-
+###############################################################################
+#                           EXTRACT SUBTITLES                                 #
+###############################################################################
 def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
     print("##########\nExtracting subtitles from video file...\n##########")
     base_name, _ = os.path.splitext(video_file)
@@ -195,6 +198,9 @@ def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
 
     return subtitle_swears
 
+###############################################################################
+#                           EXTRACT AUDIO                                     #
+###############################################################################
 def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
     print("##########\nExtracting audio from video file...\n##########")
     
@@ -235,7 +241,7 @@ def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
         chosen_codec = 'copy'
         extra_args = ['-strict', '-2']
 
-    # Construct the output filename (e.g. "MyVideo.ogg")
+    # Construct the output filename
     output_audio = os.path.splitext(video_file)[0] + chosen_ext
 
     # Build one FFmpeg command
@@ -255,38 +261,46 @@ def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration):
     # Finally, add the output filename
     cmd.append(output_audio)
 
-    # Debugging if desired:
-    # print("FFmpeg command:", " ".join(cmd))
-
     # Execute the command
     subprocess.run(cmd, text=True)
 
     # Return the path to the extracted audio file
     return output_audio
 
+###############################################################################
+#                           CONVERT TO MP3                                    #
+###############################################################################
 def convert_to_mp3(audio_file, duration):
     print("##########\nConverting audio to MP3 format...\n##########")
     # Append ".mp3" extension to the audio file
     mp3_audio_file = os.path.splitext(audio_file)[0] + ".mp3"
 
     # Use ffmpeg command to convert audio to MP3 format at 256kbps
-    cmd = ['ffmpeg', '-i', audio_file, '-vn', '-acodec', 'libmp3lame', '-b:a', '256k', mp3_audio_file]
+    cmd = [
+        'ffmpeg',
+        '-i', audio_file,
+        '-vn',
+        '-acodec', 'libmp3lame',
+        '-b:a', '256k',
+        mp3_audio_file
+    ]
 
     if duration:
-        cmd.insert(-1, '-t')  # Add '-t' before the output file
+        cmd.insert(-1, '-t')
         cmd.insert(-1, str(duration))
 
-# Execute command
     subprocess.run(cmd, text=True)
 
     print("##########\nAudio conversion to MP3 completed.\n##########")
     return mp3_audio_file
 
-# Function to transcribe audio to text using SpeechRecognition
+###############################################################################
+#                           TRANSCRIBE AUDIO                                  #
+###############################################################################
 def transcribe_audio(audio_file, output_transcription=False):
     print("##########\nTranscribing audio into text to find F-words...\n##########")
 
-    # Check if CUDA is available, and set it 
+    # Check if CUDA is available
     if torch.cuda.is_available():
         print("##########\nCUDA is available: Using GPU!\n##########")
         device = "cuda"
@@ -321,19 +335,23 @@ def transcribe_audio(audio_file, output_transcription=False):
             file.write(transcription_text)
         print(f"##########\nTranscription saved to: {transcription_file}\n##########")
 
-    # Process swear words
+    # Find swear words in the transcription
     swear_list = []
     for segment in result['segments']:
         for word_obj in segment['words']:
             word = word_obj['word']
             start = word_obj['start']
             end = word_obj['end'] + 0.1
+            # Add as many profanities as you need
             if any(swear in word.lower() for swear in ["fuck", "nigger"]):
                 swear_list.append((word, start, end))
 
     print(f"##########\nTotal swear words: {len(swear_list)}\n##########")
     return swear_list
 
+###############################################################################
+#                           COMPARE WITH SUBTITLES                            #
+###############################################################################
 def compare_with_subtitles(transcribed_text, subtitle_file):
     print("##########\nComparing transcription with subtitles...\n##########")
 
@@ -354,10 +372,9 @@ def compare_with_subtitles(transcribed_text, subtitle_file):
                 missing_f_words.append(current_dialogue)
             current_dialogue = ""
         else:
-            # Append the dialogue to the current dialogue
             current_dialogue += line.strip() + " "
 
-    # Check if any F-word is missing in the last dialogue
+    # Check the last chunk
     if any("fuck" in word.lower() for word in current_dialogue.split()):
         missing_f_words.append(current_dialogue)
 
@@ -366,24 +383,22 @@ def compare_with_subtitles(transcribed_text, subtitle_file):
         dialogue_words = dialogue.split()
         for word in dialogue_words:
             if "fuck" in word.lower() and word not in transcribed_text:
-                # Implement logic to find timestamps based on surrounding words
                 print(f"Missing F-word: {word}")
-                # Add logic here to find timestamps based on surrounding words
+                # Additional logic if needed
 
     print("##########\nComparison complete.\n##########")
 
-# Function to mute audio at specified timestamps using FFmpeg
+###############################################################################
+#                           MUTE AUDIO                                        #
+###############################################################################
 def mute_audio(audio_only_file, swears):
     """
     Mute the specified swear words in the given audio file by applying volume=0
     filters at the timestamps. If audio_only_file is .wav, final track is AC3;
-    otherwise, we copy the codec.
+    otherwise, we encode to AAC (or AC3).
     """
-    # Initialize an empty list to store filter expressions for muting
-    filter_expressions = []
-
-    # Construct the filter expression for each swear word
     print("##########\nIterating through swear list and muting...\n##########")
+    filter_expressions = []
     for swear in swears:
         print("Swear tuple:", swear)
         start = float(swear[1])
@@ -395,11 +410,10 @@ def mute_audio(audio_only_file, swears):
         f"volume=enable='between(t,{expr['start']},{expr['end']}):volume=0'"
         for expr in filter_expressions
     )
-
     print("##########\nMuting all F-words...\n##########")
     print(f"Filter String: {filter_string}")
 
-    # Decide whether to encode as AC3 (if .wav) or copy otherwise
+    # Decide final codec and extension
     out_codec, extra_args, defused_ext = get_ac3_or_copy(audio_only_file)
 
     # Construct our final DEFUSED filename
@@ -411,24 +425,23 @@ def mute_audio(audio_only_file, swears):
         'ffmpeg',
         '-i', audio_only_file,
         '-vn',                 # No video
-        '-af', filter_string,  # The volume filters
-        '-c:a', out_codec,     # "ac3" or "copy"
-        *extra_args,           # If AC3, you can add extra args like "-b:a 640k" etc. in get_ac3_or_copy
+        '-af', filter_string,  # The volume filter
+        '-c:a', out_codec,     # e.g. "ac3" or "aac"
+        *extra_args,           # e.g. ['-b:a', '384k']
         defused_audio_file
     ]
 
-    # Print or debug if you wish
+    # Debug:
     # print("FFmpeg command:", " ".join(cmd))
 
-    # Execute the ffmpeg command
     subprocess.run(cmd, text=True)
 
-    # Return the path to the defused audio file
     return defused_audio_file
 
-
+###############################################################################
+#                           REMOVE INTERMEDIATE FILES                         #
+###############################################################################
 def remove_int_files(*file_paths):
-    # Remove intermediate audio files
     print("##########\nRemoving intermediate files...\n##########")
     for file_path in file_paths:
         if os.path.exists(file_path):
@@ -436,8 +449,11 @@ def remove_int_files(*file_paths):
             print(f"##########\nDeleted: {file_path}\n##########")
         else:
             print(f"##########\nFile not found: {file_path}\n##########")
+
+###############################################################################
+#                           MAIN                                              #
+###############################################################################
 def main():
-    # Get user input for the video files
     parser = argparse.ArgumentParser(description='Process video files and mute profanity.')
     parser.add_argument('-i', '--input', nargs='+', help='Input video files', required=True)
     parser.add_argument('--ignore-subtitles', action='store_true', help='Ignore subtitles check')
@@ -450,73 +466,75 @@ def main():
 
     # Loop through each input file
     for video_file in video_files:
-        # Convert user input to absolute path
         video_file = os.path.abspath(video_file)
 
-        # Check if the file exists
         if not os.path.isfile(video_file):
             print(f"##########\nError: File not found: {video_file}\n##########")
             continue
 
-        # Get the directory and filename parts
         directory, filename = os.path.split(video_file)
         base_name, extension = os.path.splitext(filename)
 
-        # Check if a file with '-CLEAN' appended exists already (indicating I've already cleaned it)
+        # If there's already a -CLEAN file, skip
         clean_filename = f"{base_name}-CLEAN{extension}"
         clean_file_path = os.path.join(directory, clean_filename)
         if os.path.exists(clean_file_path):
-            print(f"A defused file with the name '{clean_filename}' already exists in the directory, skipping: {video_file}")
+            print(f"A defused file with the name '{clean_filename}' already exists. Skipping: {video_file}")
             continue
 
-        # Run a probe command on the video file to get all the codec, bitrate, and subtitle info we need first:
+        # Get info about audio
         audio_index, audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists = get_info(video_file)
 
-        # Extract subtitles if they exist, and if there are no swears exit. 
+        # Extract subtitles if they exist (unless ignoring)
         if not ignore_subtitles and (subtitles_exist or external_srt_exists):
             subtitle_swears = extract_subtitles(video_file, subtitles_exist, external_srt_exists)
             if not subtitle_swears:
-                print("##########\nNo F-words found in subtitles. Exiting gracefully.\n##########")
+                print("##########\nNo F-words found in subtitles. Exiting.\n##########")
                 continue
 
-        # Extract audio from video
-        audio_only_file = extract_audio(video_file, audio_index, audio_codec, bit_rate, duration) 
+        # Extract audio track
+        audio_only_file = extract_audio(video_file, audio_index, audio_codec, bit_rate, duration)
 
-        # Convert audio to mp3 for better Whisper compatibility
+        # Convert extracted audio to mp3 (for faster Whisper)
         mp3_audio_file = convert_to_mp3(audio_only_file, duration)
 
-        # Transcribe audio to text and obtain timestamps
+        # Transcribe the mp3 to find swear words/timestamps
         swears = transcribe_audio(mp3_audio_file, output_transcription)
 
-        # Check if no F-words were found
         if not swears:
-            print("##########\nNo F-words found. Exiting gracefully.\n##########")
-            remove_int_files(audio_only_file)
+            print("##########\nNo F-words found in audio. Exiting.\n##########")
+            remove_int_files(audio_only_file)  # Remove extracted but keep original
             continue
 
-        # Mute audio at specified timestamps to "defuse" the f-bombs
+        # Mute the swears
         defused_audio_file = mute_audio(audio_only_file, swears)
 
-        # Compare the transcription with subtitles if they exist
-        #if subtitles:
-        #    compare_with_subtitles(swears, subtitles)
-
-        # Append the desired suffix and the original extension to the base name
-        directory, filename = os.path.split(video_file)
-        base_name, extension = os.path.splitext(filename)
+        # Combine the new defused audio track with the original video
         clean_video_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
+        print("##########\nAdding edited audio as a second audio stream...\n##########")
 
-        # Combine modified audio with original video
-        print("##########\nAdding edited audio as a second audio stream to the original video file...\n##########")
-        cmd = ['ffmpeg', '-i', video_file, '-i', defused_audio_file, '-c:v', 'copy', '-map', '0:v:0', '-map', '0:a:0', '-map', '1:a:0', '-metadata:s:a:1', 'language=eng', '-metadata:s:a:1', 'title=Defused (CLEAN) Track', clean_video_file]
+        cmd = [
+            'ffmpeg',
+            '-i', video_file,
+            '-i', defused_audio_file,
+            '-c:v', 'copy',
+            '-map', '0:v:0',
+            '-map', '0:a:0',
+            '-map', '1:a:0',
+            '-metadata:s:a:1', 'language=eng',
+            '-metadata:s:a:1', 'title=Defused (CLEAN) Track',
+            clean_video_file
+        ]
         subprocess.run(cmd)
 
+        # If successful, remove the original + intermediate
         if os.path.exists(clean_video_file):
-            print(f"##########\nSuccessfully created clean video file: {clean_video_file}\n##########")
+            print(f"##########\nSuccessfully created clean file: {clean_video_file}\n##########")
             remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, video_file)
         else:
-            print(f"##########\nFailed to create clean video file: {clean_video_file}. Skipping original file deletion.\n##########")
-            remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file)  # Do not delete the original file
+            print(f"##########\nFailed to create clean file: {clean_video_file}. Keeping original.\n##########")
+            remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file)
 
 if __name__ == "__main__":
     main()
+
