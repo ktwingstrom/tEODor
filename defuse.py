@@ -497,7 +497,7 @@ def main():
 
         if os.path.exists(clean_video_file):
             print(f"##########\nSuccessfully created clean file: {clean_video_file}\n##########")
-            remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, video_file)
+            remove_int_files(defused_audio_file, audio_only_file, video_file)
         else:
             print(f"##########\nFailed to create clean file: {clean_video_file}. Keeping original.\n##########")
             remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file)
