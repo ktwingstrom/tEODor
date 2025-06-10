@@ -264,29 +264,30 @@ def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration, chan
     return output_audio
 
 ###############################################################################
-#                           CONVERT TO MP3                                    #
+#                           EXTRACT WAV                                       #
 ###############################################################################
-def convert_to_mp3(audio_file, duration):
-    print("##########\nConverting audio to MP3 format...\n##########")
-    mp3_audio_file = os.path.splitext(audio_file)[0] + ".mp3"
 
-    # Force stereo for MP3 conversion to avoid ffmpeg guessing mono
+def extract_for_transcription(video_file, audio_index, duration=None):
+    """
+    Extract a mono, 16 kHz, 16-bit PCM WAV just for Whisper.
+    This file is deleted once transcription is done.
+    """
+    wav_path = os.path.splitext(video_file)[0] + "_whisper.wav"
     cmd = [
-        'ffmpeg',
-        '-i', audio_file,
+        'ffmpeg', '-y',
+        '-i', video_file,
+        '-map', f'0:{audio_index}',
         '-vn',
-        '-ac', '2',
-        '-acodec', 'libmp3lame',
-        '-b:a', '256k',
-        mp3_audio_file
+        '-acodec', 'pcm_s16le',
+        '-ar', '16000',
+        '-ac', '1',
     ]
     if duration:
-        cmd.insert(-1, '-t')
-        cmd.insert(-1, str(duration))
-    subprocess.run(cmd, text=True)
+        cmd += ['-t', str(duration)]
+    cmd.append(wav_path)
 
-    print("##########\nAudio conversion to MP3 completed.\n##########")
-    return mp3_audio_file
+    subprocess.run(cmd, check=True)
+    return wav_path
 
 ###############################################################################
 #                           TRANSCRIBE AUDIO                                  #
@@ -461,10 +462,12 @@ def main():
 
         # Extract audio track (using detected channel info)
         audio_only_file = extract_audio(video_file, audio_index, audio_codec, bit_rate, duration, channels)
-        # Convert extracted audio to MP3 for faster Whisper transcription
-        mp3_audio_file = convert_to_mp3(audio_only_file, duration)
+        # Extract wav file for transcription only
+        wav = extract_for_transcription(video_file, audio_index, duration)
         # Transcribe the MP3 to get swear word timestamps
-        swears = transcribe_audio(mp3_audio_file, output_transcription)
+        swears = transcribe_audio(wav, output_transcription)
+        # Remove the wav file as we don't need it anymore
+        os.remove(wav)
 
         if not swears:
             print("##########\nNo F-words found in audio. Exiting.\n##########")
@@ -494,7 +497,7 @@ def main():
 
         if os.path.exists(clean_video_file):
             print(f"##########\nSuccessfully created clean file: {clean_video_file}\n##########")
-            remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, video_file)
+            remove_int_files(defused_audio_file, audio_only_file, video_file)
         else:
             print(f"##########\nFailed to create clean file: {clean_video_file}. Keeping original.\n##########")
             remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file)
