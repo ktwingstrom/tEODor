@@ -8,6 +8,7 @@ import torch
 import pysrt
 import re
 from tqdm import tqdm
+from rapidfuzz import fuzz
 
 # Map out common extensions to their codec. Used in multiple functions
 AUDIO_EXTENSION_MAP = {
@@ -163,20 +164,33 @@ def get_ac3_or_copy(audio_file: str):
 def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
     print("##########\nExtracting subtitles from video file...\n##########")
     base_name, _ = os.path.splitext(video_file)
-    subtitle_file = base_name + ".srt"
+    srt_file = base_name + ".srt"
+    sub_file = base_name + ".sub"
+    ass_file = base_name + ".ass"
 
-    if external_srt_exists:
-        with open(subtitle_file, 'r', encoding='utf-8') as file:
-            subtitles = file.read()
+    if os.path.isfile(srt_file):
+        subtitle_file = srt_file
+        print(f"Using external subtitle file: {subtitle_file}")
+    elif os.path.isfile(sub_file):
+        subtitle_file = sub_file
+        print(f"Using external subtitle file: {subtitle_file}")
+    elif os.path.isfile(ass_file):
+        subtitle_file = ass_file
+        print(f"Using external subtitle file: {subtitle_file}")     
+    elif subtitles_exist:
+        # Fallback to extracting internal subtitle stream
+        subtitle_file = base_name + "_internal_subtitles.srt"
+        print(f"No external .srt or .sub found. Extracting embedded subtitles to: {subtitle_file}")
+        cmd = ['ffmpeg', '-y', '-i', video_file, '-map', '0:s:0', subtitle_file]
+        subprocess.run(cmd, text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
-        # Extract subtitles using ffmpeg
-        subtitle_file = base_name + "_subtitles.srt"
-        cmd = ['ffmpeg', '-i', video_file, '-map', '0:s:0', subtitle_file]
-        subprocess.run(cmd, text=True)
-        with open(subtitle_file, 'r', encoding='utf-8') as file:
-            subtitles = file.read()
+        print("##########\nNo subtitles found (external or internal).\n##########")
+        return False, None
 
-    # Look for instances of "fuck" (case-insensitive)
+    # Read and scan for swears
+    with open(subtitle_file, 'r', encoding='utf-8') as file:
+        subtitles = file.read()
+
     matches = re.findall(r'fuck', subtitles, re.IGNORECASE)
     if matches:
         print(f"##########\nFound {len(matches)} instances of 'f**k' in subtitles.\n##########")
@@ -185,7 +199,8 @@ def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
         print("##########\nNo instances of 'f**k' found in subtitles.\n##########")
         subtitle_swears = False
 
-    return subtitle_swears
+    return subtitle_swears, subtitle_file
+
 
 ###############################################################################
 #                           EXTRACT AUDIO                                     #
@@ -308,7 +323,7 @@ def transcribe_audio(audio_file, output_transcription=False):
         for _ in range(100):
             pbar.update(1)
             time.sleep(0.01)
-        
+
     if hasattr(model, "device"):
         print(f"Model loaded on device: {model.device}")
 
@@ -319,58 +334,56 @@ def transcribe_audio(audio_file, output_transcription=False):
             time.sleep(0.05)
 
     end_time = time.time()
-    transcription_text = result['text']
     transcription_time = end_time - start_time
     print(f"##########\nTranscription Completed in {transcription_time:.2f} seconds\n##########")
-    
+
+    transcription_text = result['text']
     if output_transcription:
         transcription_file = os.path.splitext(audio_file)[0] + "_transcription.txt"
         with open(transcription_file, 'w', encoding='utf-8') as file:
             file.write(transcription_text)
         print(f"##########\nTranscription saved to: {transcription_file}\n##########")
 
-    # Find swear words (add more terms as needed)
     swear_list = []
-    for segment in result['segments']:
-        for word_obj in segment['words']:
+    segments = result.get('segments', [])
+    for segment in segments:
+        for word_obj in segment.get('words', []):
             word = word_obj['word']
             start = word_obj['start']
             end = word_obj['end'] + 0.1
             if any(swear in word.lower() for swear in ["fuck", "nigger"]):
                 swear_list.append((word, start, end))
 
-    print(f"##########\nTotal swear words: {len(swear_list)}\n##########")
-    return swear_list
+    print(f"##########\nTotal swear words found by Whisper: {len(swear_list)}\n##########")
+
+    return swear_list, segments, transcription_text
 
 ###############################################################################
 #                           COMPARE WITH SUBTITLES                            #
 ###############################################################################
-def compare_with_subtitles(transcribed_text, subtitle_file):
-    print("##########\nComparing transcription with subtitles...\n##########")
-    with open(subtitle_file, 'r') as file:
-        subtitle_lines = file.readlines()
+def parse_subtitle_file(subtitle_path):
+    import pysubs2
+    subs = pysubs2.load(subtitle_path)
+    return [(line.start.to_seconds(), line.end.to_seconds(), line.text.strip()) for line in subs]
 
-    missing_f_words = []
-    current_dialogue = ""
-    for line in subtitle_lines:
-        if line.strip() == "":
-            if any("fuck" in word.lower() for word in current_dialogue.split()):
-                missing_f_words.append(current_dialogue)
-            current_dialogue = ""
-        else:
-            current_dialogue += line.strip() + " "
+def find_missed_swears(whisper_segments, subtitle_segments, threshold=85):
+    """
+    Compare Whisper's segments to subtitle lines to find swear words that appear in subs but not transcription.
+    """
+    whisper_texts = [seg['text'].lower() for seg in whisper_segments]
+    combined_whisper_text = ' '.join(whisper_texts)
 
-    if any("fuck" in word.lower() for word in current_dialogue.split()):
-        missing_f_words.append(current_dialogue)
+    swear_candidates = []
 
-    for dialogue in missing_f_words:
-        dialogue_words = dialogue.split()
-        for word in dialogue_words:
-            if "fuck" in word.lower() and word not in transcribed_text:
-                print(f"Missing F-word: {word}")
+    for start, end, sub_text in subtitle_segments:
+        sub_text_lower = sub_text.lower()
+        if any(swear in sub_text_lower for swear in ['fuck', 'nigger']):  # expand this list as needed
+            score = fuzz.partial_ratio(sub_text_lower, combined_whisper_text)
+            if score < threshold:
+                swear_candidates.append((start, end, sub_text))
 
-    print("##########\nComparison complete.\n##########")
-
+    print(f"##########\n{len(swear_candidates)} potential missed swears found via subtitle comparison\n##########")
+    return swear_candidates
 ###############################################################################
 #                           MUTE AUDIO                                        #
 ###############################################################################
@@ -455,7 +468,7 @@ def main():
         audio_index, audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists, channels = get_info(video_file)
 
         if not ignore_subtitles and (subtitles_exist or external_srt_exists):
-            subtitle_swears = extract_subtitles(video_file, subtitles_exist, external_srt_exists)
+            subtitle_swears, subtitle_file = extract_subtitles(video_file, subtitles_exist, external_srt_exists)
             if not subtitle_swears:
                 print("##########\nNo F-words found in subtitles. Exiting.\n##########")
                 continue
@@ -464,8 +477,15 @@ def main():
         audio_only_file = extract_audio(video_file, audio_index, audio_codec, bit_rate, duration, channels)
         # Extract wav file for transcription only
         wav = extract_for_transcription(video_file, audio_index, duration)
-        # Transcribe the MP3 to get swear word timestamps
-        swears = transcribe_audio(wav, output_transcription)
+        # Transcribe the wav to get swear word timestamps
+        swears, whisper_segments, transcription_text = transcribe_audio(wav, output_transcription)
+        # Parse subtitles
+        subtitle_segments = parse_subtitle_file(subtitle_file)
+        # Find missed swears and mute
+        missed_swears = find_missed_swears(whisper_segments, subtitle_segments)
+        for word, start, end in missed_swears:
+            swears.append(("subtitle-swear", start, end))
+        
         # Remove the wav file as we don't need it anymore
         os.remove(wav)
 
