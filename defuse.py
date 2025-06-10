@@ -9,6 +9,7 @@ import pysrt
 import re
 from tqdm import tqdm
 from rapidfuzz import fuzz
+import glob
 
 # Map out common extensions to their codec. Used in multiple functions
 AUDIO_EXTENSION_MAP = {
@@ -162,32 +163,26 @@ def get_ac3_or_copy(audio_file: str):
 #                           EXTRACT SUBTITLES                                 #
 ###############################################################################
 def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
-    print("##########\nExtracting subtitles from video file...\n##########")
-    base_name, _ = os.path.splitext(video_file)
-    srt_file = base_name + ".srt"
-    sub_file = base_name + ".sub"
-    ass_file = base_name + ".ass"
+    print("##########\nSearching for external subtitles in the same directory...\n##########")
+    directory = os.path.dirname(video_file)
+    subtitle_matches = glob.glob(os.path.join(directory, "*.srt")) + \
+                       glob.glob(os.path.join(directory, "*.sub")) + \
+                       glob.glob(os.path.join(directory, "*.ass"))
 
-    if os.path.isfile(srt_file):
-        subtitle_file = srt_file
+    if subtitle_matches:
+        subtitle_file = subtitle_matches[0]
         print(f"Using external subtitle file: {subtitle_file}")
-    elif os.path.isfile(sub_file):
-        subtitle_file = sub_file
-        print(f"Using external subtitle file: {subtitle_file}")
-    elif os.path.isfile(ass_file):
-        subtitle_file = ass_file
-        print(f"Using external subtitle file: {subtitle_file}")     
     elif subtitles_exist:
-        # Fallback to extracting internal subtitle stream
+        # Fallback: extract embedded subtitles
+        base_name, _ = os.path.splitext(video_file)
         subtitle_file = base_name + "_internal_subtitles.srt"
-        print(f"No external .srt or .sub found. Extracting embedded subtitles to: {subtitle_file}")
+        print(f"No external .srt/.sub/.ass found. Extracting embedded subtitles to: {subtitle_file}")
         cmd = ['ffmpeg', '-y', '-i', video_file, '-map', '0:s:0', subtitle_file]
         subprocess.run(cmd, text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
         print("##########\nNo subtitles found (external or internal).\n##########")
         return False, None
 
-    # Read and scan for swears
     with open(subtitle_file, 'r', encoding='utf-8') as file:
         subtitles = file.read()
 
