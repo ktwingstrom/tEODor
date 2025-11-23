@@ -1,0 +1,26 @@
+# Core dependencies for tEODor profanity filtering tool
+
+# OpenAI Whisper for speech-to-text transcription
+openai-whisper>=20231117
+
+# PyTorch for GPU acceleration support
+torch>=2.0.0
+
+# Subtitle parsing
+pysrt>=1.1.2
+
+# Progress bars
+tqdm>=4.65.0
+
+# FFmpeg Python bindings (used in defuse-audio-only.py)
+ffmpeg-python>=0.2.0
+
+# Optional: Hugging Face dependencies (for hugging-face-defuse.py)
+# Uncomment if you want to use the experimental Hugging Face version
+# transformers>=4.30.0
+# datasets>=2.12.0
+
+# Note: FFmpeg and FFprobe must be installed separately on your system
+# Ubuntu/Debian: sudo apt install ffmpeg
+# macOS: brew install ffmpeg
+# Windows: Download from https://ffmpeg.org/download.html
