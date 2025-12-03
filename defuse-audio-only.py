@@ -1,11 +1,10 @@
 import subprocess
-import whisper
 import os
 import argparse
 import json
 import time
-import torch
 import ffmpeg
+from faster_whisper import WhisperModel
 
 # Function to get info from file to figure out the input codec for the audio stream
 def get_audio_info(audio_file):
@@ -54,35 +53,50 @@ def get_audio_info(audio_file):
         print("Error: Failed to parse audio information JSON.")
         return 'mp3', '128000'
 
-# Function to transcribe audio to text using OpenAI Whisper
+# Function to transcribe audio to text using faster-whisper
 def transcribe_audio(mp3_audio_file):
-
-    # Check if cuda is available
-    print(f"##########\nCuda available? {torch.cuda.is_available()}\n##########")
     print("##########\nTranscribing audio into text to find F-words...\n##########")
-    
+
     # Measure the start time
     start_time = time.time()
 
-    model = whisper.load_model("base")
-    result = model.transcribe(mp3_audio_file, word_timestamps="True")
-    
+    # Determine compute type and device
+    # faster-whisper auto-detects CUDA, we just specify compute type
+    # For CPU: use "int8" for best speed/accuracy tradeoff
+    # For GPU: use "float16" when available
+    compute_type = "int8"  # CPU optimized
+    device = "cpu"
+
+    print(f"##########\nLoading Whisper model (faster-whisper)...\n##########")
+    print(f"##########\nDevice: {device}, Compute type: {compute_type}\n##########")
+
+    # Load the Whisper model
+    # model_size can be: tiny, base, small, medium, large-v2, large-v3
+    model = WhisperModel("base", device=device, compute_type=compute_type)
+
+    print("##########\nTranscribing audio...\n##########")
+
+    # Transcribe the audio file
+    # faster-whisper returns segments generator which is memory-efficient
+    segments, info = model.transcribe(
+        mp3_audio_file,
+        beam_size=5,
+        word_timestamps=True,  # Enable word-level timestamps
+        vad_filter=True  # Voice activity detection to improve accuracy
+    )
+
     # Measure the end time
     end_time = time.time()
-    
-    # Calculate the duration
     duration = end_time - start_time
+
+    print(f"##########\nDetected language '{info.language}' with probability {info.language_probability}\n##########")
     print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
-    
-    # Extract transcribed text and corresponding timestamps
-    transcribed_text = result["text"]
 
     # Determine the filename for the transcription file
     base_name = os.path.basename(mp3_audio_file)
     filename, _ = os.path.splitext(base_name)
     filename_parts = filename.split('.')
 
-    # This section is to name the transcription and segments file. Uncomment to use. 
     # Find the index of the first occurrence of 'S' followed by a number
     season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
     if season_index is not None:
@@ -90,37 +104,52 @@ def transcribe_audio(mp3_audio_file):
     else:
         filename_prefix = filename
 
+    # Instantiate empty lists
+    swear_list = []
+    transcribed_text_parts = []
+    segments_data = []
+
+    # Process segments and words
+    print("##########\nProcessing segments for F-words...\n##########")
+    for segment in segments:
+        transcribed_text_parts.append(segment.text)
+
+        # Store segment data for JSON output
+        segment_data = {
+            "start": segment.start,
+            "end": segment.end,
+            "text": segment.text
+        }
+
+        # Process words in the segment if available
+        if segment.words:
+            segment_data["words"] = []
+            for word in segment.words:
+                segment_data["words"].append({
+                    "word": word.word,
+                    "start": word.start,
+                    "end": word.end
+                })
+
+                # Check if word contains profanity
+                if "fuck" in word.word.lower():
+                    # Add 0.1 second buffer to the end
+                    end_time = word.end + 0.1
+                    swear_list.append((word.word, word.start, end_time))
+                    print(f"Word: {word.word}, Start: {word.start}, End: {end_time}")
+
+        segments_data.append(segment_data)
+
     # Write transcription to a text file for troubleshooting
     transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
     with open(transcription_file, 'w') as file:
-        file.write(transcribed_text)
+        file.write(' '.join(transcribed_text_parts))
 
     # Write segments to a JSON file for troubleshooting
     segments_file = f"{filename_prefix}-SEGMENTS.json"
     with open(segments_file, 'w') as file:
-        json.dump(result['segments'], file, indent=4)
+        json.dump(segments_data, file, indent=4)
 
-    # pull segments from results
-    segments = result['segments']
-    
-    # Instantiate empty list 
-    swear_list = []
-
-    for segment in segments:
-        # Access the 'words' list within the segment
-        words_list = segment['words']
-
-        # Iterate over the elements in the 'words' list
-        for word_obj in words_list:
-            # Access the 'word', 'start', and 'end' elements within each word object
-            word = word_obj['word']
-            start = word_obj['start']
-            end = word_obj['end'] + 0.1
-
-            # Do something with the word, start, and end values
-            if "fuck" in word.lower():
-                swear_list.append((word, start, end))
-                print(f"Word: {word}, Start: {start}, End: {end}")
     print(f"##########\nTotal F-words: {len(swear_list)}\n##########")
     return swear_list
 
@@ -145,9 +174,25 @@ def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
         for expr in filter_expressions
     )
 
+    # Map codec to file extension
+    codec_to_extension = {
+        'pcm_s16le': 'wav',
+        'pcm_s24le': 'wav',
+        'pcm_s32le': 'wav',
+        'aac': 'aac',
+        'ac3': 'ac3',
+        'mp3': 'mp3',
+        'opus': 'opus',
+        'vorbis': 'ogg',
+        'flac': 'flac'
+    }
+
+    # Get the proper file extension for the codec
+    file_extension = codec_to_extension.get(audio_codec, os.path.splitext(audio_only_file)[1][1:])
+
     # Set up filename for muted file
     base_name, _ = os.path.splitext(audio_only_file)
-    defused_audio_file = base_name + "-DEFUSED-AUDIO" + "." + audio_codec
+    defused_audio_file = base_name + "-DEFUSED-AUDIO" + "." + file_extension
 
     # Construct ffmpeg command with a complex filtergraph
     print("##########\nMuting all F-words...\n##########")

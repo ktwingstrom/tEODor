@@ -1,16 +1,15 @@
 # Core dependencies for tEODor profanity filtering tool
 
-# OpenAI Whisper for speech-to-text transcription
-openai-whisper>=20231117
+# Faster Whisper for CPU-optimized speech-to-text transcription
+faster-whisper>=1.0.0
 
-# PyTorch for GPU acceleration support
-torch>=2.0.0
+# Optional: For future GPU use (when Tesla P4 arrives)
+# insanely-fast-whisper>=0.0.13
+# transformers>=4.30.0
+# torch>=2.0.0
 
 # Subtitle parsing
 pysrt>=1.1.2
-
-# Progress bars
-tqdm>=4.65.0
 
 # FFmpeg Python bindings (used in defuse-audio-only.py)
 ffmpeg-python>=0.2.0
