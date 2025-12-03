@@ -1,13 +1,11 @@
 import subprocess
-import whisper
 import os
 import argparse
 import json
 import time
-import torch
 import pysrt
 import re
-from tqdm import tqdm
+from faster_whisper import WhisperModel
 
 # Map out common extensions to their codec. Used in multiple functions
 AUDIO_EXTENSION_MAP = {
@@ -158,34 +156,257 @@ def get_ac3_or_copy(audio_file: str):
     return out_codec, extra_args, defused_ext
 
 ###############################################################################
-#                           EXTRACT SUBTITLES                                 #
+#                           SUBTITLE FUNCTIONS                                #
 ###############################################################################
-def extract_subtitles(video_file, subtitles_exist, external_srt_exists):
-    print("##########\nExtracting subtitles from video file...\n##########")
+
+# Profanity patterns to detect (can be extended)
+PROFANITY_PATTERNS = [
+    r'\bf+u+c+k+\w*',      # fuck and variations (fucker, fucking, etc.)
+    r'\bn+i+g+g+e+r+\w*',  # n-word and variations
+    r'\bs+h+i+t+\w*',      # shit and variations (optional, can be removed)
+]
+
+def get_subtitle_file_path(video_file, subtitles_exist, external_srt_exists):
+    """
+    Get or extract the subtitle file path.
+    Returns the path to the SRT file (either external or extracted from video).
+    """
     base_name, _ = os.path.splitext(video_file)
-    subtitle_file = base_name + ".srt"
 
     if external_srt_exists:
-        with open(subtitle_file, 'r', encoding='utf-8') as file:
-            subtitles = file.read()
-    else:
-        # Extract subtitles using ffmpeg
-        subtitle_file = base_name + "_subtitles.srt"
-        cmd = ['ffmpeg', '-i', video_file, '-map', '0:s:0', subtitle_file]
-        subprocess.run(cmd, text=True)
-        with open(subtitle_file, 'r', encoding='utf-8') as file:
-            subtitles = file.read()
+        return base_name + ".srt"
+    elif subtitles_exist:
+        extracted_subtitle_file = base_name + "_subtitles.srt"
+        if not os.path.exists(extracted_subtitle_file):
+            print("##########\nExtracting subtitles from video file...\n##########")
+            cmd = ['ffmpeg', '-y', '-i', video_file, '-map', '0:s:0', extracted_subtitle_file]
+            subprocess.run(cmd, text=True, capture_output=True)
+        return extracted_subtitle_file
+    return None
 
-    # Look for instances of "fuck" (case-insensitive)
-    matches = re.findall(r'fuck', subtitles, re.IGNORECASE)
-    if matches:
-        print(f"##########\nFound {len(matches)} instances of 'f**k' in subtitles.\n##########")
-        subtitle_swears = True
-    else:
-        print("##########\nNo instances of 'f**k' found in subtitles.\n##########")
-        subtitle_swears = False
 
-    return subtitle_swears
+def parse_srt_for_profanity(subtitle_file):
+    """
+    Parse an SRT file and extract timing information for profanity.
+
+    Returns a list of tuples: (word, start_time, end_time, subtitle_text)
+    where times are in seconds.
+    """
+    print("##########\nParsing subtitles for profanity...\n##########")
+
+    if not os.path.exists(subtitle_file):
+        print(f"##########\nSubtitle file not found: {subtitle_file}\n##########")
+        return []
+
+    try:
+        subs = pysrt.open(subtitle_file, encoding='utf-8')
+    except Exception as e:
+        print(f"##########\nError reading subtitle file: {e}\n##########")
+        try:
+            subs = pysrt.open(subtitle_file, encoding='latin-1')
+        except Exception as e2:
+            print(f"##########\nFailed to read subtitle file with fallback encoding: {e2}\n##########")
+            return []
+
+    profanity_instances = []
+    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in PROFANITY_PATTERNS]
+
+    for sub in subs:
+        text = sub.text.replace('\n', ' ')
+        start_seconds = sub.start.ordinal / 1000.0
+        end_seconds = sub.end.ordinal / 1000.0
+
+        # Check each profanity pattern
+        for pattern in compiled_patterns:
+            matches = pattern.finditer(text)
+            for match in matches:
+                word = match.group()
+                # Estimate word position within the subtitle duration
+                # This is approximate - we'll use the full subtitle window
+                profanity_instances.append({
+                    'word': word,
+                    'start': start_seconds,
+                    'end': end_seconds,
+                    'subtitle_text': text,
+                    'source': 'subtitle'
+                })
+                print(f"  Found in subtitles: '{word}' at {start_seconds:.2f}s - {end_seconds:.2f}s")
+
+    print(f"##########\nFound {len(profanity_instances)} profanity instances in subtitles.\n##########")
+    return profanity_instances
+
+
+def check_subtitles_for_profanity(video_file, subtitles_exist, external_srt_exists):
+    """
+    Quick check if subtitles contain any profanity.
+    Returns (has_profanity, subtitle_file_path)
+    """
+    subtitle_file = get_subtitle_file_path(video_file, subtitles_exist, external_srt_exists)
+
+    if not subtitle_file:
+        return False, None
+
+    try:
+        with open(subtitle_file, 'r', encoding='utf-8') as file:
+            content = file.read()
+    except UnicodeDecodeError:
+        with open(subtitle_file, 'r', encoding='latin-1') as file:
+            content = file.read()
+
+    # Quick check for any profanity
+    for pattern in PROFANITY_PATTERNS:
+        if re.search(pattern, content, re.IGNORECASE):
+            print(f"##########\nProfanity found in subtitles.\n##########")
+            return True, subtitle_file
+
+    print("##########\nNo profanity found in subtitles.\n##########")
+    return False, subtitle_file
+
+
+def merge_profanity_results(whisper_swears, subtitle_swears, tolerance=2.0):
+    """
+    Merge profanity detected by Whisper with profanity found in subtitles.
+
+    Strategy:
+    1. Start with all Whisper detections (they have precise timestamps)
+    2. For each subtitle profanity, check if Whisper found something in that time window
+    3. If Whisper missed it, add the subtitle's time window as a "fallback" detection
+
+    Args:
+        whisper_swears: List of tuples (word, start, end) from Whisper
+        subtitle_swears: List of dicts with 'word', 'start', 'end' from subtitles
+        tolerance: Time window (seconds) to consider as a match
+
+    Returns:
+        Merged list of tuples (word, start, end) for muting
+    """
+    print("##########\nMerging Whisper and subtitle profanity results...\n##########")
+
+    # Convert whisper results to a more workable format
+    merged = []
+    whisper_times = []
+
+    for swear in whisper_swears:
+        word, start, end = swear
+        merged.append({
+            'word': word,
+            'start': start,
+            'end': end,
+            'source': 'whisper'
+        })
+        whisper_times.append((start, end))
+
+    # Check each subtitle detection
+    missed_count = 0
+    for sub_swear in subtitle_swears:
+        sub_start = sub_swear['start']
+        sub_end = sub_swear['end']
+
+        # Check if Whisper found anything in this time window (with tolerance)
+        found_match = False
+        for w_start, w_end in whisper_times:
+            # Check for overlap with tolerance
+            if (w_start <= sub_end + tolerance and w_end >= sub_start - tolerance):
+                found_match = True
+                break
+
+        if not found_match:
+            # Whisper missed this one - add from subtitle
+            missed_count += 1
+            # Add a small buffer around the subtitle window
+            merged.append({
+                'word': sub_swear['word'],
+                'start': max(0, sub_start - 0.2),  # Small buffer before
+                'end': sub_end + 0.3,  # Buffer after
+                'source': 'subtitle_fallback'
+            })
+            print(f"  Whisper missed: '{sub_swear['word']}' at {sub_start:.2f}s - using subtitle timing")
+
+    print(f"##########\nWhisper found: {len(whisper_swears)}, Subtitle fallbacks added: {missed_count}\n##########")
+    print(f"##########\nTotal profanity to mute: {len(merged)}\n##########")
+
+    # Sort by start time and convert to tuple format expected by mute_audio
+    merged.sort(key=lambda x: x['start'])
+    return [(m['word'], m['start'], m['end']) for m in merged]
+
+
+def subtitle_guided_transcription(audio_file, subtitle_file, model, output_transcription=False):
+    """
+    Perform targeted transcription on specific audio segments where subtitles
+    indicate profanity exists but Whisper's full transcription may have missed it.
+
+    This does a second-pass analysis on the subtitle time windows to try to
+    get more accurate word-level timestamps.
+
+    Args:
+        audio_file: Path to the audio file
+        subtitle_file: Path to the SRT file
+        model: Loaded Whisper model
+        output_transcription: Whether to save transcription to file
+
+    Returns:
+        List of (word, start, end) tuples for detected profanity
+    """
+    print("##########\nPerforming subtitle-guided transcription analysis...\n##########")
+
+    # Get subtitle profanity windows
+    subtitle_profanity = parse_srt_for_profanity(subtitle_file)
+
+    if not subtitle_profanity:
+        print("##########\nNo profanity in subtitles to guide transcription.\n##########")
+        return []
+
+    refined_swears = []
+    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in PROFANITY_PATTERNS]
+
+    # For each subtitle window with profanity, do targeted transcription
+    for sub_item in subtitle_profanity:
+        window_start = max(0, sub_item['start'] - 1.0)  # 1 second buffer
+        window_end = sub_item['end'] + 1.0
+
+        print(f"  Analyzing window: {window_start:.2f}s - {window_end:.2f}s for '{sub_item['word']}'")
+
+        try:
+            # Transcribe just this segment with word timestamps
+            segments, _ = model.transcribe(
+                audio_file,
+                beam_size=5,
+                word_timestamps=True,
+                vad_filter=False,  # Disable VAD for small segments
+                clip_timestamps=[window_start, window_end]
+            )
+
+            segment_found = False
+            for segment in segments:
+                if segment.words:
+                    for word in segment.words:
+                        # Check if this word matches any profanity pattern
+                        for pattern in compiled_patterns:
+                            if pattern.search(word.word):
+                                end_time = word.end + 0.1
+                                refined_swears.append((word.word, word.start, end_time))
+                                print(f"    Found precise timing: '{word.word}' at {word.start:.2f}s - {end_time:.2f}s")
+                                segment_found = True
+                                break
+
+            if not segment_found:
+                # Whisper still couldn't find it - use subtitle timing as fallback
+                print(f"    Whisper couldn't detect in segment - using subtitle timing as fallback")
+                refined_swears.append((
+                    sub_item['word'],
+                    max(0, sub_item['start'] - 0.2),
+                    sub_item['end'] + 0.3
+                ))
+
+        except Exception as e:
+            print(f"    Error analyzing segment: {e} - using subtitle timing")
+            refined_swears.append((
+                sub_item['word'],
+                max(0, sub_item['start'] - 0.2),
+                sub_item['end'] + 0.3
+            ))
+
+    return refined_swears
 
 ###############################################################################
 #                           EXTRACT AUDIO                                     #
@@ -292,84 +513,170 @@ def extract_for_transcription(video_file, audio_index, duration=None):
 ###############################################################################
 #                           TRANSCRIBE AUDIO                                  #
 ###############################################################################
-def transcribe_audio(audio_file, output_transcription=False):
-    print("##########\nTranscribing audio into text to find F-words...\n##########")
+def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False):
+    """
+    Transcribe audio to find profanity with word-level timestamps.
+
+    If subtitle_file is provided, uses subtitle-enhanced detection:
+    1. Full transcription pass with Whisper
+    2. Parse subtitles for known profanity locations
+    3. Merge results, using subtitle timing as fallback for missed words
+
+    Args:
+        audio_file: Path to audio file (WAV format for best results)
+        subtitle_file: Optional path to SRT subtitle file
+        output_transcription: Whether to save full transcription to file
+
+    Returns:
+        List of tuples (word, start_time, end_time) for each profanity found
+    """
+    print("##########\nTranscribing audio into text to find profanity...\n##########")
     start_time = time.time()
 
-    if torch.cuda.is_available():
-        print("##########\nCUDA is available: Using GPU!\n##########")
-        device = "cuda"
-    else:
-        print("##########\nCUDA not available: Using CPU.\n##########")
-        device = "cpu"
+    # Determine compute type and device
+    # faster-whisper auto-detects CUDA, we just specify compute type
+    # For CPU: use "int8" for best speed/accuracy tradeoff
+    # For GPU: use "float16" when available
+    compute_type = "int8"  # CPU optimized
+    device = "cpu"
 
-    with tqdm(total=100, desc="Loading Whisper model", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
-        model = whisper.load_model("base", device=device)
-        for _ in range(100):
-            pbar.update(1)
-            time.sleep(0.01)
-        
-    if hasattr(model, "device"):
-        print(f"Model loaded on device: {model.device}")
+    print(f"##########\nLoading Whisper model (faster-whisper)...\n##########")
+    print(f"##########\nDevice: {device}, Compute type: {compute_type}\n##########")
 
-    with tqdm(total=100, desc="Transcribing audio", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
-        result = model.transcribe(audio_file, word_timestamps=True)
-        for _ in range(100):
-            pbar.update(1)
-            time.sleep(0.05)
+    # Load the Whisper model
+    # model_size can be: tiny, base, small, medium, large-v2, large-v3
+    model = WhisperModel("base", device=device, compute_type=compute_type)
 
-    end_time = time.time()
-    transcription_text = result['text']
-    transcription_time = end_time - start_time
-    print(f"##########\nTranscription Completed in {transcription_time:.2f} seconds\n##########")
-    
+    print("##########\nTranscribing audio (full pass)...\n##########")
+
+    # Transcribe the audio file
+    # faster-whisper returns segments generator which is memory-efficient
+    segments, info = model.transcribe(
+        audio_file,
+        beam_size=5,
+        word_timestamps=True,  # Enable word-level timestamps
+        vad_filter=True  # Voice activity detection to improve accuracy
+    )
+
+    # Measure the end time
+    end_time_transcription = time.time()
+    duration = end_time_transcription - start_time
+
+    print(f"##########\nDetected language '{info.language}' with probability {info.language_probability}\n##########")
+    print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
+
+    # Compile profanity patterns for matching
+    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in PROFANITY_PATTERNS]
+
+    # Instantiate empty lists
+    whisper_swear_list = []
+    transcribed_text_parts = []
+
+    # Process segments and words
+    print("##########\nProcessing segments for profanity...\n##########")
+    for segment in segments:
+        transcribed_text_parts.append(segment.text)
+
+        # Process words in the segment if available
+        if segment.words:
+            for word in segment.words:
+                # Check if word matches any profanity pattern
+                for pattern in compiled_patterns:
+                    if pattern.search(word.word):
+                        # Add 0.1 second buffer to the end
+                        end_time = word.end + 0.1
+                        whisper_swear_list.append((word.word, word.start, end_time))
+                        print(f"  Whisper found: '{word.word}' at {word.start:.2f}s - {end_time:.2f}s")
+                        break
+
+    # Write transcription to a text file for troubleshooting if requested
     if output_transcription:
         transcription_file = os.path.splitext(audio_file)[0] + "_transcription.txt"
         with open(transcription_file, 'w', encoding='utf-8') as file:
-            file.write(transcription_text)
+            file.write(' '.join(transcribed_text_parts))
         print(f"##########\nTranscription saved to: {transcription_file}\n##########")
 
-    # Find swear words (add more terms as needed)
-    swear_list = []
-    for segment in result['segments']:
-        for word_obj in segment['words']:
-            word = word_obj['word']
-            start = word_obj['start']
-            end = word_obj['end'] + 0.1
-            if any(swear in word.lower() for swear in ["fuck", "nigger"]):
-                swear_list.append((word, start, end))
+    print(f"##########\nWhisper detected {len(whisper_swear_list)} profanity instances\n##########")
 
-    print(f"##########\nTotal swear words: {len(swear_list)}\n##########")
-    return swear_list
+    # If we have subtitles, use them to catch any missed profanity
+    if subtitle_file and os.path.exists(subtitle_file):
+        print("##########\nEnhancing detection with subtitle data...\n##########")
 
-###############################################################################
-#                           COMPARE WITH SUBTITLES                            #
-###############################################################################
-def compare_with_subtitles(transcribed_text, subtitle_file):
-    print("##########\nComparing transcription with subtitles...\n##########")
-    with open(subtitle_file, 'r') as file:
-        subtitle_lines = file.readlines()
+        # Parse subtitles for profanity
+        subtitle_swears = parse_srt_for_profanity(subtitle_file)
 
-    missing_f_words = []
-    current_dialogue = ""
-    for line in subtitle_lines:
-        if line.strip() == "":
-            if any("fuck" in word.lower() for word in current_dialogue.split()):
-                missing_f_words.append(current_dialogue)
-            current_dialogue = ""
+        if subtitle_swears:
+            # Merge whisper results with subtitle hints
+            final_swear_list = merge_profanity_results(whisper_swear_list, subtitle_swears)
+
+            # If we found more via subtitles, do targeted re-analysis
+            if len(final_swear_list) > len(whisper_swear_list):
+                print("##########\nSubtitles indicated additional profanity - doing targeted analysis...\n##########")
+
+                # Find which subtitle items weren't matched by whisper
+                whisper_times = [(s[1], s[2]) for s in whisper_swear_list]
+                missed_subs = []
+                for sub in subtitle_swears:
+                    found = False
+                    for w_start, w_end in whisper_times:
+                        if (w_start <= sub['end'] + 2.0 and w_end >= sub['start'] - 2.0):
+                            found = True
+                            break
+                    if not found:
+                        missed_subs.append(sub)
+
+                # Do targeted transcription on missed segments
+                if missed_subs:
+                    print(f"##########\nAttempting to refine {len(missed_subs)} subtitle-only detections...\n##########")
+                    for missed in missed_subs:
+                        window_start = max(0, missed['start'] - 1.0)
+                        window_end = missed['end'] + 1.0
+                        print(f"  Re-analyzing: {window_start:.2f}s - {window_end:.2f}s for '{missed['word']}'")
+
+                        try:
+                            # Transcribe just this segment
+                            segs, _ = model.transcribe(
+                                audio_file,
+                                beam_size=5,
+                                word_timestamps=True,
+                                vad_filter=False,
+                                clip_timestamps=[window_start, window_end]
+                            )
+
+                            found_refined = False
+                            for seg in segs:
+                                if seg.words:
+                                    for w in seg.words:
+                                        for pattern in compiled_patterns:
+                                            if pattern.search(w.word):
+                                                # Update the fallback entry with precise timing
+                                                for i, (word, start, end) in enumerate(final_swear_list):
+                                                    if (abs(start - missed['start']) < 1.0 or
+                                                        abs(start - (missed['start'] - 0.2)) < 0.5):
+                                                        final_swear_list[i] = (w.word, w.start, w.end + 0.1)
+                                                        print(f"    Refined: '{w.word}' at {w.start:.2f}s - {w.end + 0.1:.2f}s")
+                                                        found_refined = True
+                                                        break
+                                            if found_refined:
+                                                break
+                                    if found_refined:
+                                        break
+                                if found_refined:
+                                    break
+
+                            if not found_refined:
+                                print(f"    Could not refine - keeping subtitle timing")
+
+                        except Exception as e:
+                            print(f"    Error in targeted analysis: {e}")
+
+            return final_swear_list
         else:
-            current_dialogue += line.strip() + " "
+            print("##########\nNo profanity in subtitles - using Whisper results only\n##########")
 
-    if any("fuck" in word.lower() for word in current_dialogue.split()):
-        missing_f_words.append(current_dialogue)
+    print(f"##########\nTotal profanity to mute: {len(whisper_swear_list)}\n##########")
+    return whisper_swear_list
 
-    for dialogue in missing_f_words:
-        dialogue_words = dialogue.split()
-        for word in dialogue_words:
-            if "fuck" in word.lower() and word not in transcribed_text:
-                print(f"Missing F-word: {word}")
-
-    print("##########\nComparison complete.\n##########")
 
 ###############################################################################
 #                           MUTE AUDIO                                        #
@@ -427,13 +734,21 @@ def remove_int_files(*file_paths):
 def main():
     parser = argparse.ArgumentParser(description='Process video files and mute profanity.')
     parser.add_argument('-i', '--input', nargs='+', help='Input video files', required=True)
-    parser.add_argument('--ignore-subtitles', action='store_true', help='Ignore subtitles check')
-    parser.add_argument('--output-transcription', action='store_true', help='Output transcription to a file')
+    parser.add_argument('--ignore-subtitles', action='store_true',
+                        help='Ignore subtitles entirely (do not use for detection or pre-check)')
+    parser.add_argument('--subtitle-only', action='store_true',
+                        help='Only process files that have subtitles with profanity')
+    parser.add_argument('--output-transcription', action='store_true',
+                        help='Output transcription to a file for debugging')
+    parser.add_argument('--no-subtitle-enhance', action='store_true',
+                        help='Disable subtitle-enhanced detection (use Whisper only)')
     args = parser.parse_args()
 
     video_files = args.input
     ignore_subtitles = args.ignore_subtitles
+    subtitle_only = args.subtitle_only
     output_transcription = args.output_transcription
+    use_subtitle_enhance = not args.no_subtitle_enhance
 
     for video_file in video_files:
         video_file = os.path.abspath(video_file)
@@ -454,23 +769,42 @@ def main():
         # Get audio info including channel count
         audio_index, audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists, channels = get_info(video_file)
 
+        # Get subtitle file path (if available)
+        subtitle_file = None
         if not ignore_subtitles and (subtitles_exist or external_srt_exists):
-            subtitle_swears = extract_subtitles(video_file, subtitles_exist, external_srt_exists)
-            if not subtitle_swears:
-                print("##########\nNo F-words found in subtitles. Exiting.\n##########")
+            has_profanity, subtitle_file = check_subtitles_for_profanity(
+                video_file, subtitles_exist, external_srt_exists
+            )
+
+            if subtitle_only and not has_profanity:
+                print("##########\nNo profanity found in subtitles. Skipping (--subtitle-only mode).\n##########")
                 continue
+
+            if has_profanity:
+                print(f"##########\nSubtitle file with profanity found: {subtitle_file}\n##########")
+                if use_subtitle_enhance:
+                    print("##########\nSubtitle-enhanced detection ENABLED\n##########")
+        elif subtitle_only:
+            print("##########\nNo subtitles available. Skipping (--subtitle-only mode).\n##########")
+            continue
+
+        # Determine subtitle file for enhancement
+        enhance_subtitle_file = subtitle_file if use_subtitle_enhance and not ignore_subtitles else None
 
         # Extract audio track (using detected channel info)
         audio_only_file = extract_audio(video_file, audio_index, audio_codec, bit_rate, duration, channels)
+
         # Extract wav file for transcription only
         wav = extract_for_transcription(video_file, audio_index, duration)
-        # Transcribe the MP3 to get swear word timestamps
-        swears = transcribe_audio(wav, output_transcription)
+
+        # Transcribe audio with optional subtitle enhancement
+        swears = transcribe_audio(wav, subtitle_file=enhance_subtitle_file, output_transcription=output_transcription)
+
         # Remove the wav file as we don't need it anymore
         os.remove(wav)
 
         if not swears:
-            print("##########\nNo F-words found in audio. Exiting.\n##########")
+            print("##########\nNo profanity found in audio. Exiting.\n##########")
             remove_int_files(audio_only_file)
             continue
 
@@ -500,7 +834,7 @@ def main():
             remove_int_files(defused_audio_file, audio_only_file, video_file)
         else:
             print(f"##########\nFailed to create clean file: {clean_video_file}. Keeping original.\n##########")
-            remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file)
+            remove_int_files(defused_audio_file, audio_only_file)
 
 if __name__ == "__main__":
     main()
