@@ -160,10 +160,11 @@ def get_ac3_or_copy(audio_file: str):
 ###############################################################################
 
 # Profanity patterns to detect (can be extended)
+# These patterns match both standalone words and compound words
 PROFANITY_PATTERNS = [
-    r'\bf+u+c+k+\w*',      # fuck and variations (fucker, fucking, etc.)
-    r'\bn+i+g+g+e+r+\w*',  # n-word and variations
-    r'\bs+h+i+t+\w*',      # shit and variations (optional, can be removed)
+    r'\w*f+u+c+k+\w*',     # fuck and variations (fucker, fucking, motherfucker, etc.)
+    r'\w*n+i+g+g+e+r+\w*', # n-word and variations
+    r'\w*s+h+i+t+\w*',     # shit and variations (bullshit, shitty, etc.)
 ]
 
 def get_subtitle_file_path(video_file, subtitles_exist, external_srt_exists):
