@@ -514,6 +514,46 @@ def extract_for_transcription(video_file, audio_index, duration=None):
 ###############################################################################
 #                           TRANSCRIBE AUDIO                                  #
 ###############################################################################
+def load_whisper_model():
+    """
+    Load the Whisper model using faster-whisper with GPU support.
+    Returns the model and device string.
+    """
+    # Check for CUDA availability by trying to import and use ctranslate2
+    try:
+        import ctranslate2
+        cuda_types = ctranslate2.get_supported_compute_types("cuda")
+        cuda_available = len(cuda_types) > 0
+    except Exception:
+        cuda_available = False
+        cuda_types = set()
+
+    if cuda_available:
+        device = "cuda"
+        # Tesla P4 (Pascal) supports int8 for best performance
+        # float16 requires Volta (sm_70) or newer
+        if "float16" in cuda_types:
+            compute_type = "float16"
+        elif "int8" in cuda_types:
+            compute_type = "int8"
+        else:
+            compute_type = "float32"
+        print(f"##########\nCUDA available! Using GPU acceleration.\n##########")
+    else:
+        device = "cpu"
+        compute_type = "int8"  # CPU optimized
+        print("##########\nCUDA not available. Using CPU.\n##########")
+
+    print(f"##########\nLoading Whisper model (faster-whisper)...\n##########")
+    print(f"##########\nDevice: {device}, Compute type: {compute_type}\n##########")
+
+    # Load the model
+    # model_size can be: tiny, base, small, medium, large-v2, large-v3
+    model = WhisperModel("base", device=device, compute_type=compute_type)
+
+    return model, device
+
+
 def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False):
     """
     Transcribe audio to find profanity with word-level timestamps.
@@ -534,24 +574,12 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
     print("##########\nTranscribing audio into text to find profanity...\n##########")
     start_time = time.time()
 
-    # Determine compute type and device
-    # faster-whisper auto-detects CUDA, we just specify compute type
-    # For CPU: use "int8" for best speed/accuracy tradeoff
-    # For GPU: use "float16" when available
-    compute_type = "int8"  # CPU optimized
-    device = "cpu"
-
-    print(f"##########\nLoading Whisper model (faster-whisper)...\n##########")
-    print(f"##########\nDevice: {device}, Compute type: {compute_type}\n##########")
-
-    # Load the Whisper model
-    # model_size can be: tiny, base, small, medium, large-v2, large-v3
-    model = WhisperModel("base", device=device, compute_type=compute_type)
+    # Load the model
+    model, device = load_whisper_model()
 
     print("##########\nTranscribing audio (full pass)...\n##########")
 
-    # Transcribe the audio file
-    # faster-whisper returns segments generator which is memory-efficient
+    # Transcribe the audio file using faster-whisper
     segments, info = model.transcribe(
         audio_file,
         beam_size=5,
@@ -563,7 +591,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
     end_time_transcription = time.time()
     duration = end_time_transcription - start_time
 
-    print(f"##########\nDetected language '{info.language}' with probability {info.language_probability}\n##########")
+    print(f"##########\nDetected language '{info.language}' with probability {info.language_probability:.2f}\n##########")
     print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
 
     # Compile profanity patterns for matching
@@ -574,7 +602,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
     transcribed_text_parts = []
 
     # Process segments and words
-    print("##########\nProcessing segments for profanity...\n##########")
+    print("##########\nProcessing transcription for profanity...\n##########")
     for segment in segments:
         transcribed_text_parts.append(segment.text)
 
@@ -635,7 +663,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
                         print(f"  Re-analyzing: {window_start:.2f}s - {window_end:.2f}s for '{missed['word']}'")
 
                         try:
-                            # Transcribe just this segment
+                            # Transcribe just this segment with word timestamps
                             segs, _ = model.transcribe(
                                 audio_file,
                                 beam_size=5,
