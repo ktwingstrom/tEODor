@@ -11,7 +11,33 @@ tEODor is a tool for muting profanity (F-bombs, etc.) in video and audio content
 ## Current Branch
 `feature/subtitle-enhanced-detection` - Contains GPU support and subtitle-enhanced detection
 
-## Latest Updates (2025-12-14)
+## Latest Updates (2026-01-15)
+
+### Bug Fixes and Improvements
+
+**1. English Subtitle Stream Selection**
+- Added `find_english_subtitle_stream()` function to properly select English subtitles
+- Previously grabbed first subtitle stream (often wrong language like Czech forced subs)
+- Now uses ffprobe to find `eng`/`en` language tracks
+- Prefers full subtitles over forced subtitles
+- Falls back to first subtitle if no English found
+
+**2. `--preserve-original` Flag**
+- Added flag to keep original file after creating clean version
+- Default behavior: delete original (normal workflow)
+- With flag: keep original (useful for testing)
+
+**Test Results:**
+- Tested on Pluribus S01E01 (56 min, 60+ subtitle tracks)
+- English subtitle stream correctly found at index 28
+- Whisper detected: 11 profanity instances
+- Subtitles found: 28 profanity instances
+- Subtitle fallbacks added: 17 (ones Whisper missed)
+- Total muted: 28
+
+---
+
+## Previous Updates (2025-12-14)
 
 ### GPU Support Added to Audio-Only Script
 
@@ -71,12 +97,14 @@ Implemented a multi-pass detection system that uses SRT subtitles as a reference
 - `subtitle_guided_transcription()` - Targeted re-analysis of missed segments
 - `check_subtitles_for_profanity()` - Quick check for profanity in subtitles
 - `get_subtitle_file_path()` - Handle external and embedded subtitles
+- `find_english_subtitle_stream()` - Find best English subtitle track in multi-track files
 
 **CLI Options:**
 - `--subtitle-only` - Only process files that have subtitles with profanity
 - `--no-subtitle-enhance` - Disable subtitle enhancement (Whisper only)
 - `--ignore-subtitles` - Ignore subtitles entirely
 - `--output-transcription` - Save transcription to file for debugging
+- `--preserve-original` - Keep original file after creating clean version
 
 **Profanity Patterns:**
 - Catches compound words (motherfucker, bullshit, etc.)

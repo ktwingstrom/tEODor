@@ -167,6 +167,70 @@ PROFANITY_PATTERNS = [
     r'\w*s+h+i+t+\w*',     # shit and variations (bullshit, shitty, etc.)
 ]
 
+def find_english_subtitle_stream(video_file):
+    """
+    Find the best English subtitle stream in a video file.
+    Prefers full subtitles over forced subtitles.
+    Returns the subtitle stream index (e.g., '0:s:0') or None if not found.
+    """
+    cmd = [
+        'ffprobe', '-v', 'error',
+        '-select_streams', 's',
+        '-show_entries', 'stream=index:stream_tags=language,title',
+        '-of', 'json', video_file
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        return None
+
+    try:
+        data = json.loads(result.stdout)
+        streams = data.get('streams', [])
+    except json.JSONDecodeError:
+        return None
+
+    if not streams:
+        return None
+
+    # Find English subtitle streams
+    english_streams = []
+    first_sub_index = None
+
+    for i, stream in enumerate(streams):
+        if first_sub_index is None:
+            first_sub_index = i
+
+        tags = stream.get('tags', {})
+        lang = tags.get('language', '').lower()
+        title = tags.get('title', '').lower()
+
+        if lang == 'eng' or lang == 'en':
+            # Check if it's a forced subtitle (usually for foreign dialogue only)
+            is_forced = 'forced' in title or 'foreign' in title
+            english_streams.append((i, is_forced))
+
+    if english_streams:
+        # Prefer non-forced English subtitles
+        non_forced = [s for s in english_streams if not s[1]]
+        if non_forced:
+            selected_index = non_forced[0][0]
+            print(f"##########\nFound English subtitle stream at index {selected_index}\n##########")
+            return f'0:s:{selected_index}'
+        else:
+            # Fall back to forced English if that's all we have
+            selected_index = english_streams[0][0]
+            print(f"##########\nFound English (forced) subtitle stream at index {selected_index}\n##########")
+            return f'0:s:{selected_index}'
+
+    # No English found, fall back to first subtitle
+    if first_sub_index is not None:
+        print(f"##########\nNo English subtitles found, using first subtitle stream\n##########")
+        return f'0:s:{first_sub_index}'
+
+    return None
+
+
 def get_subtitle_file_path(video_file, subtitles_exist, external_srt_exists):
     """
     Get or extract the subtitle file path.
@@ -180,7 +244,11 @@ def get_subtitle_file_path(video_file, subtitles_exist, external_srt_exists):
         extracted_subtitle_file = base_name + "_subtitles.srt"
         if not os.path.exists(extracted_subtitle_file):
             print("##########\nExtracting subtitles from video file...\n##########")
-            cmd = ['ffmpeg', '-y', '-i', video_file, '-map', '0:s:0', extracted_subtitle_file]
+            # Find the best English subtitle stream
+            sub_stream = find_english_subtitle_stream(video_file)
+            if sub_stream is None:
+                sub_stream = '0:s:0'  # Fallback to first subtitle
+            cmd = ['ffmpeg', '-y', '-i', video_file, '-map', sub_stream, extracted_subtitle_file]
             subprocess.run(cmd, text=True, capture_output=True)
         return extracted_subtitle_file
     return None
@@ -771,6 +839,8 @@ def main():
                         help='Output transcription to a file for debugging')
     parser.add_argument('--no-subtitle-enhance', action='store_true',
                         help='Disable subtitle-enhanced detection (use Whisper only)')
+    parser.add_argument('--preserve-original', action='store_true',
+                        help='Keep the original file (default is to delete it after creating clean version)')
     args = parser.parse_args()
 
     video_files = args.input
@@ -778,6 +848,7 @@ def main():
     subtitle_only = args.subtitle_only
     output_transcription = args.output_transcription
     use_subtitle_enhance = not args.no_subtitle_enhance
+    preserve_original = args.preserve_original
 
     for video_file in video_files:
         video_file = os.path.abspath(video_file)
@@ -860,7 +931,11 @@ def main():
 
         if os.path.exists(clean_video_file):
             print(f"##########\nSuccessfully created clean file: {clean_video_file}\n##########")
-            remove_int_files(defused_audio_file, audio_only_file, video_file)
+            if preserve_original:
+                print("##########\nPreserving original file as requested.\n##########")
+                remove_int_files(defused_audio_file, audio_only_file)
+            else:
+                remove_int_files(defused_audio_file, audio_only_file, video_file)
         else:
             print(f"##########\nFailed to create clean file: {clean_video_file}. Keeping original.\n##########")
             remove_int_files(defused_audio_file, audio_only_file)
