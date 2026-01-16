@@ -11,7 +11,22 @@ tEODor is a tool for muting profanity (F-bombs, etc.) in video and audio content
 ## Current Branch
 `feature/subtitle-enhanced-detection` - Contains GPU support and subtitle-enhanced detection
 
-## Latest Updates (2025-12-02)
+## Latest Updates (2025-12-14)
+
+### GPU Support Added to Audio-Only Script
+
+Added the same GPU acceleration to `defuse-audio-only.py` that was already in `defuse.py`.
+
+**Changes:**
+- Added `load_whisper_model()` function with CUDA auto-detection
+- Updated `transcribe_audio()` to use the new function
+- Now uses Tesla P4 GPU with int8 compute type for faster audiobook processing
+
+Both scripts now have identical GPU support.
+
+---
+
+## Previous Updates (2025-12-02)
 
 ### Tesla P4 GPU Support Added
 

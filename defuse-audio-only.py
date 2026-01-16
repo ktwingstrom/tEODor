@@ -3,8 +3,151 @@ import os
 import argparse
 import json
 import time
+import re
 import ffmpeg
 from faster_whisper import WhisperModel
+
+###############################################################################
+#                           PROFANITY PATTERNS                                #
+###############################################################################
+# Profanity patterns to detect (can be extended)
+# These patterns match both standalone words and compound words
+PROFANITY_PATTERNS = [
+    r'\w*f+u+c+k+\w*',     # fuck and variations (fucker, fucking, motherfucker, etc.)
+    r'\w*n+i+g+g+e+r+\w*', # n-word and variations
+    r'\w*s+h+i+t+\w*',     # shit and variations (bullshit, shitty, etc.)
+]
+
+###############################################################################
+#                              AUDIO CHUNKING                                 #
+###############################################################################
+
+# Default chunk duration in seconds (2 hours)
+CHUNK_DURATION = 7200
+# Overlap between chunks to avoid cutting words (5 seconds)
+CHUNK_OVERLAP = 5
+
+def get_audio_duration(audio_file):
+    """Get the duration of an audio file in seconds."""
+    cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+           '-of', 'default=noprint_wrappers=1:nokey=1', audio_file]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Warning: Could not get duration, assuming file needs chunking")
+        return float('inf')
+    return float(result.stdout.strip())
+
+
+def split_audio_into_chunks(audio_file, chunk_duration=CHUNK_DURATION, overlap=CHUNK_OVERLAP):
+    """
+    Split a long audio file into smaller chunks for processing.
+    Returns a list of (chunk_file_path, start_time) tuples.
+    """
+    duration = get_audio_duration(audio_file)
+
+    if duration <= chunk_duration:
+        # No need to split
+        return [(audio_file, 0.0)]
+
+    print(f"##########\nAudio is {duration/3600:.1f} hours long, splitting into chunks...\n##########")
+
+    chunks = []
+    base_name = os.path.splitext(audio_file)[0]
+    chunk_dir = base_name + "_chunks"
+
+    # Create temporary directory for chunks
+    os.makedirs(chunk_dir, exist_ok=True)
+
+    start_time = 0.0
+    chunk_num = 0
+
+    while start_time < duration:
+        chunk_file = os.path.join(chunk_dir, f"chunk_{chunk_num:04d}.mp3")
+
+        # Calculate chunk end time (with overlap for next chunk)
+        chunk_end = min(start_time + chunk_duration, duration)
+        chunk_length = chunk_end - start_time
+
+        print(f"Creating chunk {chunk_num + 1}: {start_time/60:.1f}m - {chunk_end/60:.1f}m")
+
+        # Extract chunk using ffmpeg
+        cmd = [
+            'ffmpeg', '-y', '-i', audio_file,
+            '-ss', str(start_time),
+            '-t', str(chunk_length),
+            '-acodec', 'mp3', '-ab', '64k',  # Lower bitrate for temp chunks
+            '-v', 'fatal',  # Only show fatal errors, suppress ID3 tag warnings
+            chunk_file
+        ]
+        subprocess.run(cmd, check=True)
+
+        chunks.append((chunk_file, start_time))
+
+        # Break if we've reached the end
+        if chunk_end >= duration:
+            break
+
+        # Move to next chunk, accounting for overlap
+        start_time = chunk_end - overlap
+        chunk_num += 1
+
+    print(f"##########\nCreated {len(chunks)} chunks\n##########")
+    return chunks
+
+
+def cleanup_chunks(audio_file):
+    """Remove temporary chunk files and directory."""
+    base_name = os.path.splitext(audio_file)[0]
+    chunk_dir = base_name + "_chunks"
+
+    if os.path.exists(chunk_dir):
+        import shutil
+        shutil.rmtree(chunk_dir)
+        print(f"##########\nCleaned up chunk directory: {chunk_dir}\n##########")
+
+
+###############################################################################
+#                           LOAD WHISPER MODEL                                #
+###############################################################################
+def load_whisper_model():
+    """
+    Load the Whisper model using faster-whisper with GPU support.
+    Returns the model and device string.
+    """
+    # Check for CUDA availability by trying to import and use ctranslate2
+    try:
+        import ctranslate2
+        cuda_types = ctranslate2.get_supported_compute_types("cuda")
+        cuda_available = len(cuda_types) > 0
+    except Exception:
+        cuda_available = False
+        cuda_types = set()
+
+    if cuda_available:
+        device = "cuda"
+        # Tesla P4 (Pascal) supports int8 for best performance
+        # float16 requires Volta (sm_70) or newer
+        if "float16" in cuda_types:
+            compute_type = "float16"
+        elif "int8" in cuda_types:
+            compute_type = "int8"
+        else:
+            compute_type = "float32"
+        print(f"##########\nCUDA available! Using GPU acceleration.\n##########")
+    else:
+        device = "cpu"
+        compute_type = "int8"  # CPU optimized
+        print("##########\nCUDA not available. Using CPU.\n##########")
+
+    print(f"##########\nLoading Whisper model (faster-whisper)...\n##########")
+    print(f"##########\nDevice: {device}, Compute type: {compute_type}\n##########")
+
+    # Load the model
+    # model_size can be: tiny, base, small, medium, large-v2, large-v3
+    model = WhisperModel("base", device=device, compute_type=compute_type)
+
+    return model, device
+
 
 # Function to get info from file to figure out the input codec for the audio stream
 def get_audio_info(audio_file):
@@ -53,6 +196,63 @@ def get_audio_info(audio_file):
         print("Error: Failed to parse audio information JSON.")
         return 'mp3', '128000'
 
+# Function to transcribe a single audio chunk
+def transcribe_chunk(model, chunk_file, time_offset=0.0):
+    """
+    Transcribe a single audio chunk and return swear words with adjusted timestamps.
+    """
+    swear_list = []
+    transcribed_text_parts = []
+    segments_data = []
+
+    # Compile profanity patterns
+    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in PROFANITY_PATTERNS]
+
+    # Transcribe the chunk
+    segments, info = model.transcribe(
+        chunk_file,
+        beam_size=5,
+        word_timestamps=True,
+        vad_filter=True
+    )
+
+    # Process segments and words
+    for segment in segments:
+        transcribed_text_parts.append(segment.text)
+
+        # Store segment data (with adjusted timestamps)
+        segment_data = {
+            "start": segment.start + time_offset,
+            "end": segment.end + time_offset,
+            "text": segment.text
+        }
+
+        if segment.words:
+            segment_data["words"] = []
+            for word in segment.words:
+                # Adjust timestamps by adding the chunk's start time
+                adjusted_start = word.start + time_offset
+                adjusted_end = word.end + time_offset
+
+                segment_data["words"].append({
+                    "word": word.word,
+                    "start": adjusted_start,
+                    "end": adjusted_end
+                })
+
+                # Check if word matches any profanity pattern
+                for pattern in compiled_patterns:
+                    if pattern.search(word.word):
+                        end_with_buffer = adjusted_end + 0.1
+                        swear_list.append((word.word, adjusted_start, end_with_buffer))
+                        print(f"Word: {word.word}, Start: {adjusted_start:.2f}, End: {end_with_buffer:.2f}")
+                        break  # Don't add the same word multiple times
+
+        segments_data.append(segment_data)
+
+    return swear_list, transcribed_text_parts, segments_data, info
+
+
 # Function to transcribe audio to text using faster-whisper
 def transcribe_audio(mp3_audio_file):
     print("##########\nTranscribing audio into text to find F-words...\n##########")
@@ -60,98 +260,100 @@ def transcribe_audio(mp3_audio_file):
     # Measure the start time
     start_time = time.time()
 
-    # Determine compute type and device
-    # faster-whisper auto-detects CUDA, we just specify compute type
-    # For CPU: use "int8" for best speed/accuracy tradeoff
-    # For GPU: use "float16" when available
-    compute_type = "int8"  # CPU optimized
-    device = "cpu"
+    # Split audio into chunks if needed
+    chunks = split_audio_into_chunks(mp3_audio_file)
+    is_chunked = len(chunks) > 1
 
-    print(f"##########\nLoading Whisper model (faster-whisper)...\n##########")
-    print(f"##########\nDevice: {device}, Compute type: {compute_type}\n##########")
+    # Load the model once (reuse for all chunks)
+    model, device = load_whisper_model()
 
-    # Load the Whisper model
-    # model_size can be: tiny, base, small, medium, large-v2, large-v3
-    model = WhisperModel("base", device=device, compute_type=compute_type)
-
-    print("##########\nTranscribing audio...\n##########")
-
-    # Transcribe the audio file
-    # faster-whisper returns segments generator which is memory-efficient
-    segments, info = model.transcribe(
-        mp3_audio_file,
-        beam_size=5,
-        word_timestamps=True,  # Enable word-level timestamps
-        vad_filter=True  # Voice activity detection to improve accuracy
-    )
-
-    # Measure the end time
-    end_time = time.time()
-    duration = end_time - start_time
-
-    print(f"##########\nDetected language '{info.language}' with probability {info.language_probability}\n##########")
-    print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
-
-    # Determine the filename for the transcription file
+    # Determine the filename for output files
     base_name = os.path.basename(mp3_audio_file)
     filename, _ = os.path.splitext(base_name)
     filename_parts = filename.split('.')
 
-    # Find the index of the first occurrence of 'S' followed by a number
     season_index = next((i for i, part in enumerate(filename_parts) if part.startswith('S') and part[1:].isdigit()), None)
     if season_index is not None:
         filename_prefix = '.'.join(filename_parts[:season_index+1])
     else:
         filename_prefix = filename
 
-    # Instantiate empty lists
-    swear_list = []
-    transcribed_text_parts = []
-    segments_data = []
+    # Collect results from all chunks
+    all_swears = []
+    all_text_parts = []
+    all_segments = []
+    detected_language = None
 
-    # Process segments and words
-    print("##########\nProcessing segments for F-words...\n##########")
-    for segment in segments:
-        transcribed_text_parts.append(segment.text)
+    # Process each chunk
+    for i, (chunk_file, time_offset) in enumerate(chunks):
+        if is_chunked:
+            print(f"##########\nProcessing chunk {i + 1}/{len(chunks)} (offset: {time_offset/60:.1f} min)...\n##########")
+        else:
+            print("##########\nTranscribing audio...\n##########")
 
-        # Store segment data for JSON output
-        segment_data = {
-            "start": segment.start,
-            "end": segment.end,
-            "text": segment.text
-        }
+        swears, text_parts, segments_data, info = transcribe_chunk(model, chunk_file, time_offset)
 
-        # Process words in the segment if available
-        if segment.words:
-            segment_data["words"] = []
-            for word in segment.words:
-                segment_data["words"].append({
-                    "word": word.word,
-                    "start": word.start,
-                    "end": word.end
-                })
+        all_swears.extend(swears)
+        all_text_parts.extend(text_parts)
+        all_segments.extend(segments_data)
 
-                # Check if word contains profanity
-                if "fuck" in word.word.lower():
-                    # Add 0.1 second buffer to the end
-                    end_time = word.end + 0.1
-                    swear_list.append((word.word, word.start, end_time))
-                    print(f"Word: {word.word}, Start: {word.start}, End: {end_time}")
+        if detected_language is None:
+            detected_language = info.language
+            print(f"##########\nDetected language '{info.language}' with probability {info.language_probability}\n##########")
 
-        segments_data.append(segment_data)
+        # Free up memory after each chunk
+        if is_chunked:
+            import gc
+            gc.collect()
+
+    # Clean up chunk files if we created them
+    if is_chunked:
+        cleanup_chunks(mp3_audio_file)
+
+        # Remove duplicate swears from overlap regions
+        all_swears = deduplicate_swears(all_swears)
+
+    # Measure completion time
+    end_time = time.time()
+    duration = end_time - start_time
+    print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
 
     # Write transcription to a text file for troubleshooting
     transcription_file = f"{filename_prefix}-TRANSCRIPTION.txt"
     with open(transcription_file, 'w') as file:
-        file.write(' '.join(transcribed_text_parts))
+        file.write(' '.join(all_text_parts))
 
     # Write segments to a JSON file for troubleshooting
     segments_file = f"{filename_prefix}-SEGMENTS.json"
     with open(segments_file, 'w') as file:
-        json.dump(segments_data, file, indent=4)
+        json.dump(all_segments, file, indent=4)
 
-    print(f"##########\nTotal F-words: {len(swear_list)}\n##########")
-    return swear_list
+    print(f"##########\nTotal profanity found: {len(all_swears)}\n##########")
+    return all_swears
+
+
+def deduplicate_swears(swears):
+    """
+    Remove duplicate swear detections that may occur in chunk overlap regions.
+    If two swears are within 1 second of each other, keep only the first one.
+    """
+    if not swears:
+        return swears
+
+    # Sort by start time
+    sorted_swears = sorted(swears, key=lambda x: x[1])
+    deduplicated = [sorted_swears[0]]
+
+    for swear in sorted_swears[1:]:
+        last_swear = deduplicated[-1]
+        # If this swear starts more than 1 second after the last one, it's unique
+        if swear[1] - last_swear[1] > 1.0:
+            deduplicated.append(swear)
+
+    if len(deduplicated) < len(swears):
+        print(f"##########\nRemoved {len(swears) - len(deduplicated)} duplicate detections from overlap regions\n##########")
+
+    return deduplicated
 
 # Function to mute audio at specified timestamps using FFmpeg
 def mute_audio(audio_only_file, swears, audio_codec, bit_rate):
@@ -232,7 +434,7 @@ def main():
     if not os.path.isfile(audio_file):
         print("##########\nError: File not found.\n##########")
         exit()
-    
+
     # Get the directory and filename parts
     directory, filename = os.path.split(audio_file)
     base_name, extension = os.path.splitext(filename)
@@ -247,24 +449,31 @@ def main():
     # Run a probe command on the video file to get all the codec and bitrate info we need first:
     audio_codec, bit_rate = get_audio_info(audio_file)
 
-    # Transcribe audio to text and obtain timestamps
-    swears = transcribe_audio(audio_file)
+    try:
+        # Transcribe audio to text and obtain timestamps
+        swears = transcribe_audio(audio_file)
 
-     # Check if no F-words were found
-    if not swears:
-        print("##########\nNo F-words found. Exiting gracefully.\n##########")
-        exit()
-        
-    # Mute audio at specified timestamps to "defuse" the f-bombs
-    defused_audio_file = mute_audio(audio_file, swears, audio_codec, bit_rate)
+        # Check if no profanity was found
+        if not swears:
+            print("##########\nNo profanity found. Exiting gracefully.\n##########")
+            exit()
 
-    # Append the desired suffix and the original extension to the base name
-    directory, filename = os.path.split(audio_file)
-    base_name, extension = os.path.splitext(filename)
-    clean_audio_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
+        # Mute audio at specified timestamps to "defuse" the f-bombs
+        defused_audio_file = mute_audio(audio_file, swears, audio_codec, bit_rate)
 
-    # Remove all intermediate files
-    #remove_int_files(defused_audio_file, audio_only_file, mp3_audio_file, audio_file)
+        # Append the desired suffix and the original extension to the base name
+        directory, filename = os.path.split(audio_file)
+        base_name, extension = os.path.splitext(filename)
+        clean_audio_file = os.path.join(directory, f"{base_name}-CLEAN{extension}")
+
+        # Rename the defused file to the clean file
+        print(f"##########\nRenaming {defused_audio_file} to {clean_audio_file}\n##########")
+        os.rename(defused_audio_file, clean_audio_file)
+        print(f"##########\nDone! Clean audio saved to: {clean_audio_file}\n##########")
+
+    finally:
+        # Always clean up chunks even if there's an error
+        cleanup_chunks(audio_file)
 
 if __name__ == "__main__":    
     main()
