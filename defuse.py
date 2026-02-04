@@ -116,6 +116,11 @@ def get_info(video_file):
 ###############################################################################
 #                           HELPER FUNCTIONS                                  #
 ###############################################################################
+def mask_for_log(word):
+    """Mask profanity for log output (e.g., 'fucking' -> 'f**king')."""
+    return re.sub(r'(?i)uck', '**', word)
+
+
 def get_audio_extension(codec_name: str) -> str:
     """
     Given an audio codec name, return the proper file extension.
@@ -162,9 +167,9 @@ def get_ac3_or_copy(audio_file: str):
 # Profanity patterns to detect (can be extended)
 # These patterns match both standalone words and compound words
 PROFANITY_PATTERNS = [
-    r'\w*f+u+c+k+\w*',     # fuck and variations (fucker, fucking, motherfucker, etc.)
-    r'\w*n+i+g+g+e+r+\w*', # n-word and variations
-    r'\w*s+h+i+t+\w*',     # shit and variations (bullshit, shitty, etc.)
+    r'\w*f+u+c+k+\w*'     
+    #r'\w*n+i+g+g+e+r+\w*',
+    #r'\w*s+h+i+t+\w*',
 ]
 
 def find_english_subtitle_stream(video_file):
@@ -299,7 +304,7 @@ def parse_srt_for_profanity(subtitle_file):
                     'subtitle_text': text,
                     'source': 'subtitle'
                 })
-                print(f"  Found in subtitles: '{word}' at {start_seconds:.2f}s - {end_seconds:.2f}s")
+                print(f"  Found in subtitles: '{mask_for_log(word)}' at {start_seconds:.2f}s - {end_seconds:.2f}s")
 
     print(f"##########\nFound {len(profanity_instances)} profanity instances in subtitles.\n##########")
     return profanity_instances
@@ -389,7 +394,7 @@ def merge_profanity_results(whisper_swears, subtitle_swears, tolerance=2.0):
                 'end': sub_end + 0.3,  # Buffer after
                 'source': 'subtitle_fallback'
             })
-            print(f"  Whisper missed: '{sub_swear['word']}' at {sub_start:.2f}s - using subtitle timing")
+            print(f"  Whisper missed: '{mask_for_log(sub_swear['word'])}' at {sub_start:.2f}s - using subtitle timing")
 
     print(f"##########\nWhisper found: {len(whisper_swears)}, Subtitle fallbacks added: {missed_count}\n##########")
     print(f"##########\nTotal profanity to mute: {len(merged)}\n##########")
@@ -433,7 +438,7 @@ def subtitle_guided_transcription(audio_file, subtitle_file, model, output_trans
         window_start = max(0, sub_item['start'] - 1.0)  # 1 second buffer
         window_end = sub_item['end'] + 1.0
 
-        print(f"  Analyzing window: {window_start:.2f}s - {window_end:.2f}s for '{sub_item['word']}'")
+        print(f"  Analyzing window: {window_start:.2f}s - {window_end:.2f}s for '{mask_for_log(sub_item['word'])}'")
 
         try:
             # Transcribe just this segment with word timestamps
@@ -454,7 +459,7 @@ def subtitle_guided_transcription(audio_file, subtitle_file, model, output_trans
                             if pattern.search(word.word):
                                 end_time = word.end + 0.1
                                 refined_swears.append((word.word, word.start, end_time))
-                                print(f"    Found precise timing: '{word.word}' at {word.start:.2f}s - {end_time:.2f}s")
+                                print(f"    Found precise timing: '{mask_for_log(word.word)}' at {word.start:.2f}s - {end_time:.2f}s")
                                 segment_found = True
                                 break
 
@@ -683,7 +688,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
                         # Add 0.1 second buffer to the end
                         end_time = word.end + 0.1
                         whisper_swear_list.append((word.word, word.start, end_time))
-                        print(f"  Whisper found: '{word.word}' at {word.start:.2f}s - {end_time:.2f}s")
+                        print(f"  Whisper found: '{mask_for_log(word.word)}' at {word.start:.2f}s - {end_time:.2f}s")
                         break
 
     # Write transcription to a text file for troubleshooting if requested
@@ -728,7 +733,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
                     for missed in missed_subs:
                         window_start = max(0, missed['start'] - 1.0)
                         window_end = missed['end'] + 1.0
-                        print(f"  Re-analyzing: {window_start:.2f}s - {window_end:.2f}s for '{missed['word']}'")
+                        print(f"  Re-analyzing: {window_start:.2f}s - {window_end:.2f}s for '{mask_for_log(missed['word'])}'")
 
                         try:
                             # Transcribe just this segment with word timestamps
@@ -751,7 +756,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
                                                     if (abs(start - missed['start']) < 1.0 or
                                                         abs(start - (missed['start'] - 0.2)) < 0.5):
                                                         final_swear_list[i] = (w.word, w.start, w.end + 0.1)
-                                                        print(f"    Refined: '{w.word}' at {w.start:.2f}s - {w.end + 0.1:.2f}s")
+                                                        print(f"    Refined: '{mask_for_log(w.word)}' at {w.start:.2f}s - {w.end + 0.1:.2f}s")
                                                         found_refined = True
                                                         break
                                             if found_refined:
@@ -785,7 +790,7 @@ def mute_audio(audio_only_file, swears):
     print("##########\nIterating through swear list and muting...\n##########")
     filter_expressions = []
     for swear in swears:
-        print("Swear tuple:", swear)
+        print(f"Muting: '{mask_for_log(swear[0])}' at {swear[1]:.2f}s - {swear[2]:.2f}s")
         start = float(swear[1])
         end = float(swear[2])
         filter_expressions.append({'start': start, 'end': end})
@@ -812,6 +817,59 @@ def mute_audio(audio_only_file, swears):
     ]
     subprocess.run(cmd, text=True)
     return defused_audio_file
+
+###############################################################################
+#                           MASK SUBTITLES                                    #
+###############################################################################
+def mask_subtitle_file(input_subtitle_file, output_subtitle_file):
+    """
+    Mask profanity in a subtitle file by replacing matches with asterisks.
+    Returns the number of replacements made.
+    """
+    print(f"##########\nMasking profanity in subtitle file: {input_subtitle_file}\n##########")
+
+    # Pattern to match fuck and variations
+    profanity_pattern = re.compile(r'(f+u+c+k+)', re.IGNORECASE)
+
+    # Try different encodings
+    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']
+    content = None
+    used_encoding = 'utf-8'
+
+    for encoding in encodings:
+        try:
+            with open(input_subtitle_file, 'r', encoding=encoding) as f:
+                content = f.read()
+            used_encoding = encoding
+            break
+        except UnicodeDecodeError:
+            continue
+
+    if content is None:
+        print(f"##########\nCould not decode subtitle file with any supported encoding\n##########")
+        return 0
+
+    # Count matches
+    matches = profanity_pattern.findall(content)
+    count = len(matches)
+
+    if count == 0:
+        print(f"##########\nNo profanity found in subtitle file\n##########")
+        return 0
+
+    # Replace matches with asterisks of same length
+    def replace_match(match):
+        return '*' * len(match.group(0))
+
+    masked_content = profanity_pattern.sub(replace_match, content)
+
+    # Write output
+    with open(output_subtitle_file, 'w', encoding=used_encoding) as f:
+        f.write(masked_content)
+
+    print(f"##########\nMasked {count} instance(s) of profanity -> {output_subtitle_file}\n##########")
+    return count
+
 
 ###############################################################################
 #                           REMOVE INTERMEDIATE FILES                         #
@@ -931,14 +989,24 @@ def main():
 
         if os.path.exists(clean_video_file):
             print(f"##########\nSuccessfully created clean file: {clean_video_file}\n##########")
+
+            # Mask subtitles if available
+            if subtitle_file and os.path.exists(subtitle_file):
+                clean_subtitle_file = os.path.join(directory, f"{base_name}-CLEAN.srt")
+                mask_subtitle_file(subtitle_file, clean_subtitle_file)
+
+            # Check if we need to clean up extracted subtitle file
+            extracted_subtitle_file = os.path.join(directory, f"{base_name}_subtitles.srt")
+
             if preserve_original:
                 print("##########\nPreserving original file as requested.\n##########")
-                remove_int_files(defused_audio_file, audio_only_file)
+                remove_int_files(defused_audio_file, audio_only_file, extracted_subtitle_file)
             else:
-                remove_int_files(defused_audio_file, audio_only_file, video_file)
+                remove_int_files(defused_audio_file, audio_only_file, video_file, extracted_subtitle_file)
         else:
             print(f"##########\nFailed to create clean file: {clean_video_file}. Keeping original.\n##########")
-            remove_int_files(defused_audio_file, audio_only_file)
+            extracted_subtitle_file = os.path.join(directory, f"{base_name}_subtitles.srt")
+            remove_int_files(defused_audio_file, audio_only_file, extracted_subtitle_file)
 
 if __name__ == "__main__":
     main()
