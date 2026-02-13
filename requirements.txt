@@ -10,10 +10,20 @@ pysrt>=1.1.2
 # FFmpeg Python bindings (used in defuse-audio-only.py)
 ffmpeg-python>=0.2.0
 
+# PyTorch - required for GPU/CUDA operations
+torch>=2.0.0
+
+# Hugging Face transformers and datasets (used for transcription pipelines)
+transformers>=4.30.0
+datasets>=2.14.0
+
+# Subtitle synchronization verification
+ffsubsync>=0.4.0
+
 # Note: FFmpeg and FFprobe must be installed separately on your system
 # Ubuntu/Debian: sudo apt install ffmpeg
 # macOS: brew install ffmpeg
 # Windows: Download from https://ffmpeg.org/download.html
 
-# Note: For CUDA/GPU support, faster-whisper will automatically use GPU
-# if CUDA toolkit is installed. No special PyTorch installation needed.
+# Note: For CUDA/GPU support, ensure CUDA toolkit is installed.
+# faster-whisper will automatically use GPU if available.

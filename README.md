@@ -30,9 +30,29 @@ Then it will add the newly cleaned audio track back into the original container 
 
 REQUIREMENTS:
 
-openai-whisper (https://github.com/openai/whisper)
+- faster-whisper >= 1.0.0 (GPU-accelerated via CTranslate2)
+- pysrt >= 1.1.2
+- ffmpeg-python >= 0.2.0
+- FFmpeg (system install)
 
-ffmpeg (https://formulae.brew.sh/formula/ffmpeg OR https://pypi.org/project/ffmpeg/)
+#####################
+SUBTITLE MASKING
+#####################
+
+If you just want to mask profanity in subtitle files (without processing video/audio), use the mask-subtitles.py script:
+
+```bash
+# Basic usage - creates input-CLEAN.srt
+python3 mask-subtitles.py -i subtitle.srt
+
+# Specify output file
+python3 mask-subtitles.py -i subtitle.srt -o clean-subtitle.srt
+
+# Modify in place (creates .bak backup first)
+python3 mask-subtitles.py -i subtitle.srt --in-place
+```
+
+This replaces profanity with asterisks (e.g., "fucking" → "****ing") while preserving the subtitle file structure and encoding
 
 
 #####################

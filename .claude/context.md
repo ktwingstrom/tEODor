@@ -11,7 +11,55 @@ tEODor is a tool for muting profanity (F-bombs, etc.) in video and audio content
 ## Current Branch
 `feature/subtitle-enhanced-detection` - Contains GPU support and subtitle-enhanced detection
 
-## Latest Updates (2026-01-15)
+## Latest Updates (2026-02-03)
+
+### Subtitle Masking Integrated into Pipeline
+
+The standalone `mask-subtitles.py` functionality is now integrated into `defuse.py`. After successfully creating a clean video, subtitles are automatically masked.
+
+**Pipeline Flow:**
+1. Process video → create `video-CLEAN.mkv` (muted audio)
+2. If subtitles exist → create `video-CLEAN.srt` (masked profanity)
+3. Clean up intermediate files (including extracted `_subtitles.srt`)
+
+**New Functions:**
+- `mask_subtitle_file()` - Masks profanity in subtitle files, handles multiple encodings
+- `mask_for_log()` - Masks profanity in log output (displays `f**k` instead of full word)
+
+**Log Output:**
+- All log messages now display masked profanity for cleaner output
+- Example: `Whisper found: 'f**king' at 123.45s` instead of the full word
+
+---
+
+## Previous Updates (2026-01-27)
+
+### New Script: mask-subtitles.py
+
+Added a standalone script for masking profanity in subtitle files without processing video/audio.
+
+**Features:**
+- Handles multiple encodings (UTF-8, UTF-8-BOM, Latin-1, CP1252)
+- Preserves original encoding when writing
+- Matches "fuck" variations (fuck, fucking, fucker, motherfucker, etc.)
+- Replaces with asterisks matching the length of matched word
+- Creates backup when using `--in-place` flag
+
+**Usage:**
+```bash
+python3 mask-subtitles.py -i subtitle.srt                    # Creates subtitle-CLEAN.srt
+python3 mask-subtitles.py -i subtitle.srt -o output.srt      # Specify output
+python3 mask-subtitles.py -i subtitle.srt --in-place         # Modify in place (creates .bak)
+```
+
+**Test Results:**
+- Tested on Pluribus S01E01 subtitles
+- Found and masked 18 instances of profanity
+- Encoding preserved correctly
+
+---
+
+## Previous Updates (2026-01-15)
 
 ### Bug Fixes and Improvements
 
@@ -98,6 +146,8 @@ Implemented a multi-pass detection system that uses SRT subtitles as a reference
 - `check_subtitles_for_profanity()` - Quick check for profanity in subtitles
 - `get_subtitle_file_path()` - Handle external and embedded subtitles
 - `find_english_subtitle_stream()` - Find best English subtitle track in multi-track files
+- `mask_subtitle_file()` - Mask profanity in subtitle files (integrated pipeline)
+- `mask_for_log()` - Mask profanity for log output display
 
 **CLI Options:**
 - `--subtitle-only` - Only process files that have subtitles with profanity
@@ -113,7 +163,8 @@ Implemented a multi-pass detection system that uses SRT subtitles as a reference
 ## Files Overview
 
 - `defuse.py` - Main script for video files (GPU-accelerated)
-- `defuse-audio-only.py` - Audio-only processing (CPU with faster-whisper)
+- `defuse-audio-only.py` - Audio-only processing (GPU-accelerated)
+- `mask-subtitles.py` - Standalone subtitle profanity masking (no video/audio processing)
 - `test_subtitle_detection.py` - Unit tests (11 tests)
 - `requirements.txt` - Dependencies
 

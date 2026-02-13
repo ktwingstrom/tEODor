@@ -12,6 +12,11 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Mock heavy dependencies that aren't needed for unit tests
+from unittest.mock import MagicMock
+sys.modules['faster_whisper'] = MagicMock()
+sys.modules['ctranslate2'] = MagicMock()
+
 from defuse import (
     parse_srt_for_profanity,
     merge_profanity_results,
@@ -38,15 +43,7 @@ class TestProfanityPatterns(unittest.TestCase):
         self.assertIsNone(pattern.search("duck"))
         self.assertIsNone(pattern.search("luck"))
 
-    def test_shit_variations(self):
-        pattern = re.compile(PROFANITY_PATTERNS[2], re.IGNORECASE)
-        # Should match - includes compound words
-        self.assertIsNotNone(pattern.search("shit"))
-        self.assertIsNotNone(pattern.search("shitty"))
-        self.assertIsNotNone(pattern.search("bullshit"))
-        # Should not match
-        self.assertIsNone(pattern.search("ship"))
-        self.assertIsNone(pattern.search("shift"))
+    # test_shit_variations skipped - shit pattern is currently commented out in PROFANITY_PATTERNS
 
 
 class TestParseSrtForProfanity(unittest.TestCase):
@@ -83,14 +80,16 @@ This is fucking crazy!
         results = parse_srt_for_profanity(self.srt_file)
 
         self.assertEqual(len(results), 2)
-        # First profanity
+        # First profanity: "What the fuck is that?" (22 chars, 10.0-12.0s)
+        # "fuck" at chars 9-13 → interpolated then ±0.3s buffer
         self.assertEqual(results[0]['word'], 'fuck')
-        self.assertAlmostEqual(results[0]['start'], 10.0, places=1)
-        self.assertAlmostEqual(results[0]['end'], 12.0, places=1)
-        # Second profanity
+        self.assertAlmostEqual(results[0]['start'], 10.52, delta=0.1)
+        self.assertAlmostEqual(results[0]['end'], 11.48, delta=0.1)
+        # Second profanity: "This is fucking crazy!" (22 chars, 20.0-23.0s)
+        # "fucking" at chars 8-15 → interpolated then ±0.3s buffer
         self.assertEqual(results[1]['word'], 'fucking')
-        self.assertAlmostEqual(results[1]['start'], 20.0, places=1)
-        self.assertAlmostEqual(results[1]['end'], 23.0, places=1)
+        self.assertAlmostEqual(results[1]['start'], 20.79, delta=0.1)
+        self.assertAlmostEqual(results[1]['end'], 22.35, delta=0.1)
 
     def test_parse_srt_no_profanity(self):
         """Test parsing SRT without profanity."""
@@ -109,7 +108,9 @@ I'm doing well, thanks.
         self.assertEqual(len(results), 0)
 
     def test_parse_srt_multiple_profanity_same_line(self):
-        """Test parsing SRT with multiple profanity in same subtitle."""
+        """Test parsing SRT with multiple profanity in same subtitle.
+        Note: only 'fuck' pattern is currently active (shit is commented out).
+        """
         srt_content = """1
 00:00:10,000 --> 00:00:15,000
 Fuck this shit, I'm done!
@@ -118,10 +119,27 @@ Fuck this shit, I'm done!
             f.write(srt_content)
 
         results = parse_srt_for_profanity(self.srt_file)
+        # Only fuck pattern is active, shit is commented out
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['word'], 'Fuck')
+
+
+    def test_interpolation_gives_distinct_times(self):
+        """Test that multiple profanity words in same line get distinct timestamps."""
+        srt_content = """1
+00:00:10,000 --> 00:00:16,000
+What the fuck? Are you fucking kidding me?
+"""
+        with open(self.srt_file, 'w', encoding='utf-8') as f:
+            f.write(srt_content)
+
+        results = parse_srt_for_profanity(self.srt_file)
         self.assertEqual(len(results), 2)
-        words = [r['word'].lower() for r in results]
-        self.assertIn('fuck', words)
-        self.assertIn('shit', words)
+        # The two words should have different start/end times
+        self.assertNotAlmostEqual(results[0]['start'], results[1]['start'], places=1)
+        self.assertNotAlmostEqual(results[0]['end'], results[1]['end'], places=1)
+        # First word ("fuck") should be earlier than second ("fucking")
+        self.assertLess(results[0]['start'], results[1]['start'])
 
 
 class TestMergeProfanityResults(unittest.TestCase):
@@ -198,6 +216,42 @@ class TestMergeProfanityResults(unittest.TestCase):
         self.assertTrue(results[0][1] < results[1][1])
         self.assertEqual(results[0][0], 'shit')  # Earlier one first
         self.assertEqual(results[1][0], 'fuck')  # Later one second
+
+
+    def test_merge_deduplicates_overlapping(self):
+        """Test that overlapping entries are merged into one."""
+        whisper_swears = [
+            ('fuck', 10.5, 11.0),
+        ]
+        subtitle_swears = [
+            # This subtitle entry overlaps with the whisper detection
+            {'word': 'fuck', 'start': 10.4, 'end': 11.1, 'subtitle_text': 'test', 'source': 'subtitle'},
+            # This one is far away, should not be merged
+            {'word': 'fuck', 'start': 50.0, 'end': 51.0, 'subtitle_text': 'test', 'source': 'subtitle'},
+        ]
+
+        results = merge_profanity_results(whisper_swears, subtitle_swears, tolerance=0.5)
+
+        # The close entries should be merged, leaving 2 total (not 3)
+        # The second subtitle entry at 50s should remain separate
+        self.assertEqual(len(results), 2)
+        # First should be whisper-sourced (preferred over subtitle)
+        self.assertAlmostEqual(results[0][1], 10.5, places=1)
+        # Second is the far-away subtitle fallback
+        self.assertAlmostEqual(results[1][1], 49.8, places=1)
+
+    def test_merge_deduplicates_adjacent_subtitle_entries(self):
+        """Test that adjacent subtitle-only entries get merged."""
+        whisper_swears = []
+        subtitle_swears = [
+            {'word': 'fuck', 'start': 10.0, 'end': 10.8, 'subtitle_text': 'test', 'source': 'subtitle'},
+            {'word': 'fucking', 'start': 10.5, 'end': 11.2, 'subtitle_text': 'test', 'source': 'subtitle'},
+        ]
+
+        results = merge_profanity_results(whisper_swears, subtitle_swears)
+
+        # Should be merged into one entry since they overlap
+        self.assertEqual(len(results), 1)
 
 
 class TestCheckSubtitlesForProfanity(unittest.TestCase):

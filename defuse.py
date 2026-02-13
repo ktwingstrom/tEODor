@@ -1,3 +1,4 @@
+#!/home/kevin/scripts/venv/bin/python3
 import subprocess
 import os
 import argparse
@@ -6,6 +7,7 @@ import time
 import pysrt
 import re
 from faster_whisper import WhisperModel
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 # Map out common extensions to their codec. Used in multiple functions
 AUDIO_EXTENSION_MAP = {
@@ -104,11 +106,13 @@ def get_info(video_file):
     print(f"Channels: {channels}\n##########")
     print(f"##########\nSubtitles Exist in Video File: {subtitles_exist}\n##########")
 
-    # Check for an external SRT file
-    base_name, _ = os.path.splitext(video_file)
-    subtitle_file = base_name + ".srt"
-    external_srt_exists = os.path.isfile(subtitle_file)
-    print(f"##########\nExternal SRT Subtitle File Exists: {external_srt_exists}\n##########")
+    # Check for an external SRT file (handles .en.srt, .en.hi.srt, etc.)
+    external_srt = find_external_srt(video_file)
+    external_srt_exists = external_srt is not None
+    if external_srt_exists:
+        print(f"##########\nExternal SRT Subtitle File Found: {external_srt}\n##########")
+    else:
+        print(f"##########\nExternal SRT Subtitle File Exists: False\n##########")
 
     # Return all needed info including channel count
     return audio_stream_index, audio_codec, bit_rate, duration, subtitles_exist, external_srt_exists, channels
@@ -119,6 +123,29 @@ def get_info(video_file):
 def mask_for_log(word):
     """Mask profanity for log output (e.g., 'fucking' -> 'f**king')."""
     return re.sub(r'(?i)uck', '**', word)
+
+
+def find_external_srt(video_file):
+    """
+    Search for an external SRT file matching the video file.
+    Handles common naming patterns like .srt, .en.srt, .en.hi.srt, etc.
+    Returns the path if found, None otherwise.
+    """
+    base_name, _ = os.path.splitext(video_file)
+    directory = os.path.dirname(video_file)
+    video_basename = os.path.basename(base_name)
+
+    # Check exact match first
+    exact = base_name + ".srt"
+    if os.path.isfile(exact):
+        return exact
+
+    # Search for SRT files with language/tag suffixes (e.g., .en.srt, .en.hi.srt)
+    for f in os.listdir(directory):
+        if f.lower().endswith('.srt') and f.startswith(video_basename + '.'):
+            return os.path.join(directory, f)
+
+    return None
 
 
 def get_audio_extension(codec_name: str) -> str:
@@ -243,18 +270,48 @@ def get_subtitle_file_path(video_file, subtitles_exist, external_srt_exists):
     """
     base_name, _ = os.path.splitext(video_file)
 
-    if external_srt_exists:
-        return base_name + ".srt"
+    # Check for external SRT (handles .en.srt, .en.hi.srt, etc.)
+    external_srt = find_external_srt(video_file)
+    if external_srt:
+        return external_srt
     elif subtitles_exist:
+        # Find the best English subtitle stream
+        sub_stream = find_english_subtitle_stream(video_file)
+        if sub_stream is None:
+            sub_stream = '0:s:0'  # Fallback to first subtitle
+
+        # Check if subtitle codec is bitmap-based (can't extract to SRT)
+        sub_idx = int(sub_stream.split(':')[-1])
+        probe_cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', f's:{sub_idx}',
+            '-show_entries', 'stream=codec_name',
+            '-of', 'json', video_file
+        ]
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+        bitmap_codecs = {'hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'xsub'}
+        if probe_result.returncode == 0:
+            try:
+                probe_data = json.loads(probe_result.stdout)
+                probe_streams = probe_data.get('streams', [])
+                if probe_streams:
+                    codec = probe_streams[0].get('codec_name', '')
+                    if codec in bitmap_codecs:
+                        print(f"##########\nSubtitle stream is bitmap-based ({codec}), cannot extract to SRT\n##########")
+                        return None
+            except json.JSONDecodeError:
+                pass
+
         extracted_subtitle_file = base_name + "_subtitles.srt"
         if not os.path.exists(extracted_subtitle_file):
             print("##########\nExtracting subtitles from video file...\n##########")
-            # Find the best English subtitle stream
-            sub_stream = find_english_subtitle_stream(video_file)
-            if sub_stream is None:
-                sub_stream = '0:s:0'  # Fallback to first subtitle
             cmd = ['ffmpeg', '-y', '-i', video_file, '-map', sub_stream, extracted_subtitle_file]
-            subprocess.run(cmd, text=True, capture_output=True)
+            result = subprocess.run(cmd, text=True, capture_output=True)
+            if result.returncode != 0 or not os.path.exists(extracted_subtitle_file) or os.path.getsize(extracted_subtitle_file) == 0:
+                print("##########\nFailed to extract subtitles from video file\n##########")
+                if os.path.exists(extracted_subtitle_file) and os.path.getsize(extracted_subtitle_file) == 0:
+                    os.remove(extracted_subtitle_file)
+                return None
         return extracted_subtitle_file
     return None
 
@@ -291,20 +348,28 @@ def parse_srt_for_profanity(subtitle_file):
         end_seconds = sub.end.ordinal / 1000.0
 
         # Check each profanity pattern
+        duration = end_seconds - start_seconds
+        text_len = len(text) if len(text) > 0 else 1
         for pattern in compiled_patterns:
             matches = pattern.finditer(text)
             for match in matches:
                 word = match.group()
-                # Estimate word position within the subtitle duration
-                # This is approximate - we'll use the full subtitle window
+                # Estimate word position via character offset interpolation
+                char_ratio_start = match.start() / text_len
+                char_ratio_end = match.end() / text_len
+                word_start = start_seconds + char_ratio_start * duration
+                word_end = start_seconds + char_ratio_end * duration
+                # Add ±0.3s buffer, clamped to subtitle boundaries
+                buf_start = max(start_seconds, word_start - 0.3)
+                buf_end = min(end_seconds, word_end + 0.3)
                 profanity_instances.append({
                     'word': word,
-                    'start': start_seconds,
-                    'end': end_seconds,
+                    'start': buf_start,
+                    'end': buf_end,
                     'subtitle_text': text,
                     'source': 'subtitle'
                 })
-                print(f"  Found in subtitles: '{mask_for_log(word)}' at {start_seconds:.2f}s - {end_seconds:.2f}s")
+                print(f"  Found in subtitles: '{mask_for_log(word)}' at {buf_start:.2f}s - {buf_end:.2f}s")
 
     print(f"##########\nFound {len(profanity_instances)} profanity instances in subtitles.\n##########")
     return profanity_instances
@@ -399,9 +464,120 @@ def merge_profanity_results(whisper_swears, subtitle_swears, tolerance=2.0):
     print(f"##########\nWhisper found: {len(whisper_swears)}, Subtitle fallbacks added: {missed_count}\n##########")
     print(f"##########\nTotal profanity to mute: {len(merged)}\n##########")
 
-    # Sort by start time and convert to tuple format expected by mute_audio
+    # Sort by start time
     merged.sort(key=lambda x: x['start'])
+
+    # Deduplicate overlapping entries
+    if merged:
+        deduped = [merged[0]]
+        for entry in merged[1:]:
+            prev = deduped[-1]
+            if entry['start'] < prev['end'] - 0.1:
+                # Overlapping - merge into wider window, prefer whisper source
+                if entry['source'] == 'whisper' and prev['source'] != 'whisper':
+                    deduped[-1] = {
+                        'word': entry['word'],
+                        'start': min(prev['start'], entry['start']),
+                        'end': max(prev['end'], entry['end']),
+                        'source': entry['source']
+                    }
+                else:
+                    deduped[-1] = {
+                        'word': prev['word'],
+                        'start': min(prev['start'], entry['start']),
+                        'end': max(prev['end'], entry['end']),
+                        'source': prev['source']
+                    }
+            else:
+                deduped.append(entry)
+        merged = deduped
+
     return [(m['word'], m['start'], m['end']) for m in merged]
+
+
+def check_subtitle_sync(audio_file, subtitle_file, threshold=0.5):
+    """
+    Check subtitle sync against audio using ffsubsync.
+    If the offset exceeds threshold, replace subtitle_file with the corrected version.
+
+    Args:
+        audio_file: Path to the audio/video file
+        subtitle_file: Path to the SRT subtitle file
+        threshold: Maximum acceptable offset in seconds (default 0.5)
+
+    Returns:
+        The (possibly corrected) subtitle file path, or the original if ffsubsync
+        is not installed or sync is already good.
+    """
+    # Check if ffsubsync is available
+    try:
+        result = subprocess.run(
+            ['ffsubsync', '--version'],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print("##########\nffsubsync not available - skipping sync check\n##########")
+            return subtitle_file
+    except FileNotFoundError:
+        print("##########\nffsubsync not installed - skipping sync check\n##########")
+        return subtitle_file
+
+    print(f"##########\nChecking subtitle sync against audio...\n##########")
+
+    # Create a temp file for the synced output
+    base, ext = os.path.splitext(subtitle_file)
+    synced_file = base + "_synced" + ext
+
+    try:
+        cmd = [
+            'ffsubsync',
+            audio_file,
+            '-i', subtitle_file,
+            '-o', synced_file
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+        if result.returncode != 0:
+            print(f"##########\nffsubsync failed: {result.stderr.strip()}\n##########")
+            if os.path.exists(synced_file):
+                os.remove(synced_file)
+            return subtitle_file
+
+        # Parse offset from ffsubsync output
+        # ffsubsync prints offset info to stderr
+        offset = 0.0
+        for line in result.stderr.split('\n'):
+            if 'offset' in line.lower():
+                # Try to extract numeric offset value
+                import re as _re
+                match = _re.search(r'[-+]?\d*\.?\d+', line)
+                if match:
+                    offset = abs(float(match.group()))
+                    break
+
+        print(f"##########\nSubtitle sync offset: {offset:.3f}s (threshold: {threshold}s)\n##########")
+
+        if offset > threshold and os.path.exists(synced_file):
+            # Replace original with corrected version
+            import shutil
+            shutil.move(synced_file, subtitle_file)
+            print(f"##########\nSubtitles re-synced (offset was {offset:.3f}s)\n##########")
+        else:
+            # Sync is good enough, clean up temp file
+            if os.path.exists(synced_file):
+                os.remove(synced_file)
+            print(f"##########\nSubtitles are in sync (offset {offset:.3f}s <= {threshold}s)\n##########")
+
+    except subprocess.TimeoutExpired:
+        print("##########\nffsubsync timed out - skipping sync check\n##########")
+        if os.path.exists(synced_file):
+            os.remove(synced_file)
+    except Exception as e:
+        print(f"##########\nffsubsync error: {e} - skipping sync check\n##########")
+        if os.path.exists(synced_file):
+            os.remove(synced_file)
+
+    return subtitle_file
 
 
 def subtitle_guided_transcription(audio_file, subtitle_file, model, output_transcription=False):
@@ -450,8 +626,25 @@ def subtitle_guided_transcription(audio_file, subtitle_file, model, output_trans
                 clip_timestamps=[window_start, window_end]
             )
 
+            # Consume generator with timeout to prevent hangs
+            def _collect_segments():
+                return list(segments)
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_collect_segments)
+                try:
+                    seg_list = future.result(timeout=30)
+                except FuturesTimeoutError:
+                    print(f"    Timeout during re-analysis - using subtitle timing as fallback")
+                    refined_swears.append((
+                        sub_item['word'],
+                        max(0, sub_item['start'] - 0.2),
+                        sub_item['end'] + 0.3
+                    ))
+                    continue
+
             segment_found = False
-            for segment in segments:
+            for segment in seg_list:
                 if segment.words:
                     for word in segment.words:
                         # Check if this word matches any profanity pattern
@@ -587,11 +780,15 @@ def extract_for_transcription(video_file, audio_index, duration=None):
 ###############################################################################
 #                           TRANSCRIBE AUDIO                                  #
 ###############################################################################
-def load_whisper_model():
+DEFAULT_MODEL = "nyrahealth/faster_CrisperWhisper"
+
+def load_whisper_model(model_name=None):
     """
     Load the Whisper model using faster-whisper with GPU support.
     Returns the model and device string.
     """
+    if model_name is None:
+        model_name = DEFAULT_MODEL
     # Check for CUDA availability by trying to import and use ctranslate2
     try:
         import ctranslate2
@@ -617,17 +814,16 @@ def load_whisper_model():
         compute_type = "int8"  # CPU optimized
         print("##########\nCUDA not available. Using CPU.\n##########")
 
-    print(f"##########\nLoading Whisper model (faster-whisper)...\n##########")
+    print(f"##########\nLoading Whisper model: {model_name}\n##########")
     print(f"##########\nDevice: {device}, Compute type: {compute_type}\n##########")
 
     # Load the model
-    # model_size can be: tiny, base, small, medium, large-v2, large-v3
-    model = WhisperModel("base", device=device, compute_type=compute_type)
+    model = WhisperModel(model_name, device=device, compute_type=compute_type)
 
     return model, device
 
 
-def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False):
+def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False, model_name=None):
     """
     Transcribe audio to find profanity with word-level timestamps.
 
@@ -648,7 +844,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
     start_time = time.time()
 
     # Load the model
-    model, device = load_whisper_model()
+    model, device = load_whisper_model(model_name=model_name)
 
     print("##########\nTranscribing audio (full pass)...\n##########")
 
@@ -715,7 +911,8 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
             if len(final_swear_list) > len(whisper_swear_list):
                 print("##########\nSubtitles indicated additional profanity - doing targeted analysis...\n##########")
 
-                # Find which subtitle items weren't matched by whisper
+                # Find which subtitle items weren't matched by whisper,
+                # and track their index in final_swear_list for direct update
                 whisper_times = [(s[1], s[2]) for s in whisper_swear_list]
                 missed_subs = []
                 for sub in subtitle_swears:
@@ -725,12 +922,19 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
                             found = True
                             break
                     if not found:
-                        missed_subs.append(sub)
+                        # Find this entry's index in final_swear_list
+                        target_idx = None
+                        for i, (word, start, end) in enumerate(final_swear_list):
+                            if (abs(start - sub['start']) < 1.0 and
+                                    word.lower() == sub['word'].lower()):
+                                target_idx = i
+                                break
+                        missed_subs.append((sub, target_idx))
 
                 # Do targeted transcription on missed segments
                 if missed_subs:
                     print(f"##########\nAttempting to refine {len(missed_subs)} subtitle-only detections...\n##########")
-                    for missed in missed_subs:
+                    for missed, target_idx in missed_subs:
                         window_start = max(0, missed['start'] - 1.0)
                         window_end = missed['end'] + 1.0
                         print(f"  Re-analyzing: {window_start:.2f}s - {window_end:.2f}s for '{mask_for_log(missed['word'])}'")
@@ -745,28 +949,35 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False)
                                 clip_timestamps=[window_start, window_end]
                             )
 
-                            found_refined = False
-                            for seg in segs:
+                            # Consume generator with timeout to prevent hangs
+                            def _collect_segments():
+                                return list(segs)
+
+                            with ThreadPoolExecutor(max_workers=1) as executor:
+                                future = executor.submit(_collect_segments)
+                                try:
+                                    seg_list = future.result(timeout=30)
+                                except FuturesTimeoutError:
+                                    print(f"    Timeout during re-analysis - keeping subtitle timing")
+                                    continue
+
+                            # Collect all profanity candidates from re-analysis
+                            candidates = []
+                            for seg in seg_list:
                                 if seg.words:
                                     for w in seg.words:
                                         for pattern in compiled_patterns:
                                             if pattern.search(w.word):
-                                                # Update the fallback entry with precise timing
-                                                for i, (word, start, end) in enumerate(final_swear_list):
-                                                    if (abs(start - missed['start']) < 1.0 or
-                                                        abs(start - (missed['start'] - 0.2)) < 0.5):
-                                                        final_swear_list[i] = (w.word, w.start, w.end + 0.1)
-                                                        print(f"    Refined: '{mask_for_log(w.word)}' at {w.start:.2f}s - {w.end + 0.1:.2f}s")
-                                                        found_refined = True
-                                                        break
-                                            if found_refined:
+                                                candidates.append(w)
                                                 break
-                                    if found_refined:
-                                        break
-                                if found_refined:
-                                    break
 
-                            if not found_refined:
+                            if candidates and target_idx is not None:
+                                # Pick candidate closest to expected subtitle time
+                                expected_time = missed['start']
+                                best = min(candidates, key=lambda c: abs(c.start - expected_time))
+                                final_swear_list[target_idx] = (best.word, best.start, best.end + 0.1)
+                                print(f"    Refined: '{mask_for_log(best.word)}' at {best.start:.2f}s - {best.end + 0.1:.2f}s")
+                            else:
                                 print(f"    Could not refine - keeping subtitle timing")
 
                         except Exception as e:
@@ -899,6 +1110,10 @@ def main():
                         help='Disable subtitle-enhanced detection (use Whisper only)')
     parser.add_argument('--preserve-original', action='store_true',
                         help='Keep the original file (default is to delete it after creating clean version)')
+    parser.add_argument('--no-sync-check', action='store_true',
+                        help='Disable ffsubsync subtitle sync verification')
+    parser.add_argument('--model', type=str, default=None,
+                        help=f'Whisper model to use (default: {DEFAULT_MODEL})')
     args = parser.parse_args()
 
     video_files = args.input
@@ -907,6 +1122,7 @@ def main():
     output_transcription = args.output_transcription
     use_subtitle_enhance = not args.no_subtitle_enhance
     preserve_original = args.preserve_original
+    sync_check = not args.no_sync_check
 
     for video_file in video_files:
         video_file = os.path.abspath(video_file)
@@ -946,6 +1162,10 @@ def main():
             print("##########\nNo subtitles available. Skipping (--subtitle-only mode).\n##########")
             continue
 
+        # Run subtitle sync check if enabled and we have a subtitle file
+        if subtitle_file and sync_check and not ignore_subtitles:
+            subtitle_file = check_subtitle_sync(video_file, subtitle_file)
+
         # Determine subtitle file for enhancement
         enhance_subtitle_file = subtitle_file if use_subtitle_enhance and not ignore_subtitles else None
 
@@ -956,7 +1176,7 @@ def main():
         wav = extract_for_transcription(video_file, audio_index, duration)
 
         # Transcribe audio with optional subtitle enhancement
-        swears = transcribe_audio(wav, subtitle_file=enhance_subtitle_file, output_transcription=output_transcription)
+        swears = transcribe_audio(wav, subtitle_file=enhance_subtitle_file, output_transcription=output_transcription, model_name=args.model)
 
         # Remove the wav file as we don't need it anymore
         os.remove(wav)
