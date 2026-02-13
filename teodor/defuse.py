@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import subprocess
+import sys
 import os
 import argparse
 import json
 import time
+import shutil
 import pysrt
 import re
 from faster_whisper import WhisperModel
@@ -495,6 +497,20 @@ def merge_profanity_results(whisper_swears, subtitle_swears, tolerance=2.0):
     return [(m['word'], m['start'], m['end']) for m in merged]
 
 
+def _find_ffsubsync():
+    """Find the ffsubsync executable, checking the current Python environment first."""
+    # Check in the same directory as the running Python interpreter (handles pipx/venv)
+    bin_dir = os.path.dirname(sys.executable)
+    venv_ffsubsync = os.path.join(bin_dir, 'ffsubsync')
+    if os.path.isfile(venv_ffsubsync) and os.access(venv_ffsubsync, os.X_OK):
+        return venv_ffsubsync
+    # Fall back to system PATH
+    path_ffsubsync = shutil.which('ffsubsync')
+    if path_ffsubsync:
+        return path_ffsubsync
+    return None
+
+
 def check_subtitle_sync(audio_file, subtitle_file, threshold=0.5):
     """
     Check subtitle sync against audio using ffsubsync.
@@ -510,15 +526,8 @@ def check_subtitle_sync(audio_file, subtitle_file, threshold=0.5):
         is not installed or sync is already good.
     """
     # Check if ffsubsync is available
-    try:
-        result = subprocess.run(
-            ['ffsubsync', '--version'],
-            capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            print("##########\nffsubsync not available - skipping sync check\n##########")
-            return subtitle_file
-    except FileNotFoundError:
+    ffsubsync_cmd = _find_ffsubsync()
+    if ffsubsync_cmd is None:
         print("##########\nffsubsync not installed - skipping sync check\n##########")
         return subtitle_file
 
@@ -530,7 +539,7 @@ def check_subtitle_sync(audio_file, subtitle_file, threshold=0.5):
 
     try:
         cmd = [
-            'ffsubsync',
+            ffsubsync_cmd,
             audio_file,
             '-i', subtitle_file,
             '-o', synced_file
@@ -549,8 +558,7 @@ def check_subtitle_sync(audio_file, subtitle_file, threshold=0.5):
         for line in result.stderr.split('\n'):
             if 'offset' in line.lower():
                 # Try to extract numeric offset value
-                import re as _re
-                match = _re.search(r'[-+]?\d*\.?\d+', line)
+                match = re.search(r'[-+]?\d*\.?\d+', line)
                 if match:
                     offset = abs(float(match.group()))
                     break
@@ -559,7 +567,6 @@ def check_subtitle_sync(audio_file, subtitle_file, threshold=0.5):
 
         if offset > threshold and os.path.exists(synced_file):
             # Replace original with corrected version
-            import shutil
             shutil.move(synced_file, subtitle_file)
             print(f"##########\nSubtitles re-synced (offset was {offset:.3f}s)\n##########")
         else:
