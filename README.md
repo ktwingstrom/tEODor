@@ -1,65 +1,145 @@
 # tEODor
-A tool for defusing (muting) F-bombs in video and audio content
 
-USAGE:
-run the defuse.py script and pass it a video file.  
+Mute profanity in video and audio files using AI-powered transcription.
 
-Flags:
+tEODor uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (a CTranslate2-based Whisper implementation) to transcribe audio, locate profanity with word-level timestamps, and mute those specific moments using FFmpeg. The original video and all other audio are untouched -- only the offending words are silenced.
 
--i --> input file(s)
---ignore-subtitles --> this flag tells the script to skip checking embedded or external subtitles for f-bombs.  This is a default check to quickly assess whether filtering needs to be done. 
+## How It Works
 
-ex:
-python3 defuse.py -i /path/to/my_video.mp4
+1. **Subtitle pre-check** (video mode) -- If subtitles are available (embedded or external `.srt`), tEODor scans them first. If no profanity is found in subtitles, it can skip transcription entirely (`--subtitle-only` mode).
+2. **Audio extraction** -- The audio track is extracted from the video container, preserving the original codec and channel layout.
+3. **AI transcription** -- faster-whisper transcribes the audio with word-level timestamps to pinpoint exactly where profanity occurs.
+4. **Subtitle-enhanced detection** -- When subtitles are available, tEODor cross-references Whisper results with subtitle text. If subtitles indicate profanity that Whisper missed, it does a targeted second-pass transcription on those segments. This catches words that full-file transcription sometimes misses.
+5. **Precision muting** -- FFmpeg applies volume-zero filters at the exact timestamps of each detected word.
+6. **Clean output** -- For video, the muted audio is added as a second track labeled "Defused (CLEAN) Track". For audio-only files, the original is replaced with the clean version.
 
-#####################
-Script Flow
-#####################
+## Installation
 
-When the script runs it will first check for subtitles, and quickly scan through them for the presence of any F words as a basic check to see if the audio even needs to be filtered.  If there are no subtitles found it will just continue as normal.  If there are subtitles and no swears are found it exits, otherwise it continues. 
+Requires **Python 3.10+** and **FFmpeg** installed on your system.
 
-Then it will extract the audio from the video file, then transcribe it to text using the whisper-python AI model.  
-
-It will locate all the f-bombs, and make a note of the exact timestamps of the beginning and ending of the word. 
-
-Then the audio file is fed into FFMPEG again and given a filter with the timestamps of each word we need to mute.  
-
-FFMPEG will mute JUST the f-words that were found.  
-
-Then it will add the newly cleaned audio track back into the original container (mp4, mkv, etc). The new audio track will have "(Defused)" appended to it. The video file is not altered or transcoded at all. 
-
-REQUIREMENTS:
-
-- faster-whisper >= 1.0.0 (GPU-accelerated via CTranslate2)
-- pysrt >= 1.1.2
-- ffmpeg-python >= 0.2.0
-- FFmpeg (system install)
-
-#####################
-SUBTITLE MASKING
-#####################
-
-If you just want to mask profanity in subtitle files (without processing video/audio), use the mask-subtitles.py script:
+### pipx (recommended)
 
 ```bash
-# Basic usage - creates input-CLEAN.srt
-python3 mask-subtitles.py -i subtitle.srt
-
-# Specify output file
-python3 mask-subtitles.py -i subtitle.srt -o clean-subtitle.srt
-
-# Modify in place (creates .bak backup first)
-python3 mask-subtitles.py -i subtitle.srt --in-place
+pipx install git+https://github.com/ktwingstrom/tEODor.git
 ```
 
-This replaces profanity with asterisks (e.g., "fucking" → "****ing") while preserving the subtitle file structure and encoding
+### pip
 
+```bash
+pip install git+https://github.com/ktwingstrom/tEODor.git
+```
 
-#####################
-BATCH FUNCTIONALITY 
-#####################
+### From source
 
-You may pass multiple filenames to the script and it will execute fiiltering on all files in sequence.  If you have a folder full of files you can just pass the /folder/location/* and it will try to filter all video files in the folder.  
+```bash
+git clone https://github.com/ktwingstrom/tEODor.git
+cd tEODor
+pip install -e .
+```
 
-This will look for all video files in the folder you specified recursively and perform the F-bomb defusing. 
-PLEASE NOTE: you'll need to update the file location of the defuse.py script that is listed in the defuse-all.sh script. 
+### GPU / CUDA Setup
+
+tEODor automatically uses GPU acceleration when CUDA is available. If you need a specific CUDA version of PyTorch, install it before tEODor:
+
+```bash
+python3 -m venv ~/.venvs/teodor
+source ~/.venvs/teodor/bin/activate
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install git+https://github.com/ktwingstrom/tEODor.git
+```
+
+## Usage
+
+### `defuse` -- Mute profanity in video files
+
+```bash
+defuse -i movie.mkv
+defuse -i episode1.mkv episode2.mkv episode3.mkv
+```
+
+Creates a `-CLEAN` version of each file with the muted audio added as a second audio track.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `-i`, `--input` | Input video file(s) (required) |
+| `--ignore-subtitles` | Skip subtitle detection entirely |
+| `--subtitle-only` | Only process files that have profanity in subtitles |
+| `--no-subtitle-enhance` | Disable subtitle-enhanced detection (Whisper only) |
+| `--no-sync-check` | Disable ffsubsync subtitle sync verification |
+| `--preserve-original` | Keep the original file (default: delete after creating clean version) |
+| `--output-transcription` | Save transcription to a text file for debugging |
+| `--model MODEL` | Whisper model to use (default: `nyrahealth/faster_CrisperWhisper`) |
+
+### `defuse-audio` -- Mute profanity in audio files
+
+```bash
+defuse-audio -i audiobook.mp3
+```
+
+Creates a `-CLEAN` version of the audio file.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `-i`, `--input` | Input audio file (required) |
+
+Supports long files (audiobooks, podcasts) with automatic chunking for files over 2 hours.
+
+### `mask-subtitles` -- Mask profanity in subtitle files
+
+```bash
+mask-subtitles -i subtitle.srt
+mask-subtitles -i subtitle.srt -o clean.srt
+mask-subtitles -i subtitle.srt --in-place
+```
+
+Replaces profanity with asterisks (e.g., "fucking" becomes "****ing") while preserving subtitle structure and encoding.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `-i`, `--input` | Input subtitle file (required) |
+| `-o`, `--output` | Output file (default: `input-CLEAN.srt`) |
+| `--in-place` | Modify the file in place (creates `.bak` backup) |
+
+## Batch Processing
+
+Process an entire directory of video files:
+
+```bash
+defuse -i /path/to/shows/Season01/*
+```
+
+Or use the included shell scripts for recursive directory processing:
+
+```bash
+./defuse-all.sh -i /path/to/shows/
+./defuse-all-audio.sh -i /path/to/audiobooks/
+```
+
+## System Requirements
+
+- **Python** >= 3.10
+- **FFmpeg** and **FFprobe** -- must be installed and on your PATH
+  - Ubuntu/Debian: `sudo apt install ffmpeg`
+  - macOS: `brew install ffmpeg`
+  - Windows: download from [ffmpeg.org](https://ffmpeg.org/download.html)
+- **ffsubsync** (optional) -- for subtitle sync verification. Installed automatically as a dependency.
+
+## Updating
+
+```bash
+# pipx
+pipx upgrade teodor
+
+# pip
+pip install --upgrade git+https://github.com/ktwingstrom/tEODor.git
+```
+
+## License
+
+[GPL-3.0](LICENSE)
