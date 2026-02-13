@@ -9,15 +9,12 @@ import tempfile
 import os
 import sys
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 # Mock heavy dependencies that aren't needed for unit tests
 from unittest.mock import MagicMock
 sys.modules['faster_whisper'] = MagicMock()
 sys.modules['ctranslate2'] = MagicMock()
 
-from defuse import (
+from teodor.defuse import (
     parse_srt_for_profanity,
     merge_profanity_results,
     check_subtitles_for_profanity,
