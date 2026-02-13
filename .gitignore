@@ -1,0 +1,16 @@
+# Media files
+*.mkv
+*.mp4
+*.srt
+*.wav
+*.m4a
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# Transcription output
+*_whisper_transcription.txt
