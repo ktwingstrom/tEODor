@@ -878,34 +878,43 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False,
 
     # Instantiate empty lists
     whisper_swear_list = []
-    transcribed_text_parts = []
+
+    # Open transcription file for progressive writing if requested
+    transcription_file = None
+    transcription_fh = None
+    if output_transcription:
+        transcription_file = os.path.splitext(audio_file)[0] + "_transcription.txt"
+        transcription_fh = open(transcription_file, 'w', encoding='utf-8')
 
     # Process segments and words
     print("##########\nProcessing transcription for profanity...\n##########")
-    for segment in segments:
-        transcribed_text_parts.append(segment.text)
+    try:
+        for segment in segments:
+            # Write transcription progressively so partial output is saved on crash
+            if transcription_fh:
+                transcription_fh.write(segment.text)
+                transcription_fh.flush()
 
-        # Process words in the segment if available
-        if segment.words:
-            for word in segment.words:
-                # Check if word matches any profanity pattern
-                for pattern in compiled_patterns:
-                    if pattern.search(word.word):
-                        # Add 0.1 second buffer to the end
-                        end_time = word.end + 0.1
-                        whisper_swear_list.append((word.word, word.start, end_time))
-                        print(f"  Whisper found: '{mask_for_log(word.word)}' at {word.start:.2f}s - {end_time:.2f}s")
-                        break
+            # Process words in the segment if available
+            if segment.words:
+                for word in segment.words:
+                    # Check if word matches any profanity pattern
+                    for pattern in compiled_patterns:
+                        if pattern.search(word.word):
+                            # Add 0.1 second buffer to the end
+                            end_time = word.end + 0.1
+                            whisper_swear_list.append((word.word, word.start, end_time))
+                            print(f"  Whisper found: '{mask_for_log(word.word)}' at {word.start:.2f}s - {end_time:.2f}s")
+                            break
+    finally:
+        if transcription_fh:
+            transcription_fh.close()
 
     transcription_duration = time.time() - start_time
     print(f"##########\nDetected language '{info.language}' with probability {info.language_probability:.2f}\n##########")
     print(f"##########\nTranscription completed in {transcription_duration:.2f} seconds\n##########")
 
-    # Write transcription to a text file for troubleshooting if requested
-    if output_transcription:
-        transcription_file = os.path.splitext(audio_file)[0] + "_transcription.txt"
-        with open(transcription_file, 'w', encoding='utf-8') as file:
-            file.write(' '.join(transcribed_text_parts))
+    if transcription_file:
         print(f"##########\nTranscription saved to: {transcription_file}\n##########")
 
     print(f"##########\nWhisper detected {len(whisper_swear_list)} profanity instances\n##########")
@@ -1128,8 +1137,8 @@ def main():
                         help='Disable ffsubsync subtitle sync verification')
     parser.add_argument('--model', type=str, default=None,
                         help=f'Whisper model to use (default: {DEFAULT_MODEL})')
-    parser.add_argument('--batch-size', type=int, default=8,
-                        help='Batch size for parallel GPU inference (0 to disable, default: 8)')
+    parser.add_argument('--batch-size', type=int, default=6,
+                        help='Batch size for parallel GPU inference (0 to disable, default: 6)')
     args = parser.parse_args()
 
     video_files = args.input
