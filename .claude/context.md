@@ -13,6 +13,32 @@ tEODor is a tool for muting profanity (F-bombs, etc.) in video and audio content
 
 ## Latest Updates (2026-02-13)
 
+### v1.1.0 - Batched GPU inference and cleaner output
+
+Added `BatchedInferencePipeline` from faster-whisper to process multiple audio segments in parallel on the GPU, giving ~3-4x transcription speedup. Previously sequential processing was not fully utilizing GPU bandwidth — a full movie took ~1 hour for transcription, now expected ~15-20 minutes.
+
+**Changes:**
+- Wrap `WhisperModel` in `BatchedInferencePipeline` for parallel segment processing
+- New `--batch-size` CLI flag (default 8, use 0 to fall back to sequential)
+- Fixed misleading transcription timing — was only measuring model load, now measures actual transcription
+- Added `language="en"` to all transcribe calls (skips language detection)
+- Suppressed verbose ffmpeg output from extract/mute steps (capture_output)
+- Removed giant filter string dump from mute_audio
+- Final remux uses `-loglevel warning -stats` to show only progress line
+- Bumped `faster-whisper` dependency to `>=1.1.0`
+
+**Files changed:** `teodor/defuse.py`, `pyproject.toml`
+**Tag:** `v1.1.0` pushed to GitHub
+
+**To update:** `pipx upgrade teodor`
+
+**Notes:**
+- Tesla P4 (8GB): start with `--batch-size 8`, try `--batch-size 4` if OOM
+- Batched mode processes segments independently (no context passing), WER may be very slightly higher
+- Re-analysis of subtitle-missed clips still uses raw model (clip_timestamps not compatible with batched)
+
+---
+
 ### v1.0.1 - Fix ffsubsync detection in pipx installs
 
 When installed globally via `pipx install git+https://github.com/ktwingstrom/tEODor.git`, ffsubsync was not detected because it lives inside pipx's isolated venv and isn't on the system PATH.
@@ -21,8 +47,6 @@ When installed globally via `pipx install git+https://github.com/ktwingstrom/tEO
 
 **Files changed:** `teodor/defuse.py`, `pyproject.toml`
 **Tag:** `v1.0.1` pushed to GitHub
-
-**To update:** `pipx upgrade teodor`
 
 ---
 
@@ -170,6 +194,9 @@ Implemented a multi-pass detection system that uses SRT subtitles as a reference
 - `--ignore-subtitles` - Ignore subtitles entirely
 - `--output-transcription` - Save transcription to file for debugging
 - `--preserve-original` - Keep original file after creating clean version
+- `--batch-size N` - Batch size for parallel GPU inference (default 8, 0 to disable)
+- `--no-sync-check` - Disable ffsubsync subtitle sync verification
+- `--model NAME` - Whisper model to use (default: nyrahealth/faster_CrisperWhisper)
 
 **Profanity Patterns:**
 - Catches compound words (motherfucker, bullshit, etc.)
@@ -184,7 +211,7 @@ Implemented a multi-pass detection system that uses SRT subtitles as a reference
 - `requirements.txt` - Dependencies
 
 ## Dependencies
-- faster-whisper>=1.0.0 (uses CTranslate2 for GPU)
+- faster-whisper>=1.1.0 (uses CTranslate2 for GPU, BatchedInferencePipeline)
 - pysrt>=1.1.2
 - ffmpeg-python>=0.2.0
 

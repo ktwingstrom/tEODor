@@ -789,7 +789,7 @@ def extract_for_transcription(video_file, audio_index, duration=None):
 ###############################################################################
 #                           TRANSCRIBE AUDIO                                  #
 ###############################################################################
-DEFAULT_MODEL = "nyrahealth/faster_CrisperWhisper"
+DEFAULT_MODEL = "large-v3"
 
 def load_whisper_model(model_name=None):
     """

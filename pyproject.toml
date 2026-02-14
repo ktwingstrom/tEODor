@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "teodor"
-version = "1.1.0"
+version = "1.1.1"
 description = "Mute profanity in video and audio content using AI transcription"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -17,6 +17,7 @@ dependencies = [
     "transformers>=4.30.0",
     "datasets>=2.14.0",
     "ffsubsync>=0.4.0",
+    "setuptools>=68.0",
 ]
 
 [project.scripts]
