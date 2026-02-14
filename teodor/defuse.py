@@ -461,7 +461,7 @@ def merge_profanity_results(whisper_swears, subtitle_swears, tolerance=2.0):
                 'end': sub_end + 0.3,  # Buffer after
                 'source': 'subtitle_fallback'
             })
-            print(f"  Whisper missed: '{mask_for_log(sub_swear['word'])}' at {sub_start:.2f}s - using subtitle timing")
+            print(f"  Whisper missed: '{mask_for_log(sub_swear['word'])}' at {sub_start:.2f}s - using estimated word timing from subtitles")
 
     print(f"##########\nWhisper found: {len(whisper_swears)}, Subtitle fallbacks added: {missed_count}\n##########")
     print(f"##########\nTotal profanity to mute: {len(merged)}\n##########")
@@ -1002,7 +1002,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False,
                                 final_swear_list[target_idx] = (best.word, best.start, best.end + 0.1)
                                 print(f"    Refined: '{mask_for_log(best.word)}' at {best.start:.2f}s - {best.end + 0.1:.2f}s")
                             else:
-                                print(f"    Could not refine - keeping subtitle timing")
+                                print(f"    Could not refine - using estimated word timing from subtitles")
 
                         except Exception as e:
                             print(f"    Error in targeted analysis: {e}")
