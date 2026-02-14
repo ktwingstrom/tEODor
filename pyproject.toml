@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "teodor"
-version = "1.0.1"
+version = "1.1.0"
 description = "Mute profanity in video and audio content using AI transcription"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.10"
 dependencies = [
-    "faster-whisper>=1.0.0",
+    "faster-whisper>=1.1.0",
     "pysrt>=1.1.2",
     "ffmpeg-python>=0.2.0",
     "torch>=2.0.0",

@@ -8,7 +8,7 @@ import time
 import shutil
 import pysrt
 import re
-from faster_whisper import WhisperModel
+from faster_whisper import WhisperModel, BatchedInferencePipeline
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 # Map out common extensions to their codec. Used in multiple functions
@@ -755,7 +755,9 @@ def extract_audio(video_file, audio_index, audio_codec, bit_rate, duration, chan
         cmd.extend(['-t', str(duration)])
     cmd.append(output_audio)
 
-    subprocess.run(cmd, text=True)
+    result = subprocess.run(cmd, text=True, capture_output=True)
+    if result.returncode != 0:
+        print(f"Error extracting audio: {result.stderr.strip()}")
     return output_audio
 
 ###############################################################################
@@ -781,7 +783,7 @@ def extract_for_transcription(video_file, audio_index, duration=None):
         cmd += ['-t', str(duration)]
     cmd.append(wav_path)
 
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, capture_output=True)
     return wav_path
 
 ###############################################################################
@@ -830,7 +832,7 @@ def load_whisper_model(model_name=None):
     return model, device
 
 
-def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False, model_name=None):
+def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False, model_name=None, batch_size=8):
     """
     Transcribe audio to find profanity with word-level timestamps.
 
@@ -843,32 +845,33 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False,
         audio_file: Path to audio file (WAV format for best results)
         subtitle_file: Optional path to SRT subtitle file
         output_transcription: Whether to save full transcription to file
+        batch_size: Number of segments to process in parallel (0 to disable)
 
     Returns:
         List of tuples (word, start_time, end_time) for each profanity found
     """
     print("##########\nTranscribing audio into text to find profanity...\n##########")
-    start_time = time.time()
 
     # Load the model
     model, device = load_whisper_model(model_name=model_name)
 
     print("##########\nTranscribing audio (full pass)...\n##########")
+    start_time = time.time()
 
     # Transcribe the audio file using faster-whisper
-    segments, info = model.transcribe(
-        audio_file,
+    transcribe_kwargs = dict(
         beam_size=5,
-        word_timestamps=True,  # Enable word-level timestamps
-        vad_filter=True  # Voice activity detection to improve accuracy
+        word_timestamps=True,
+        vad_filter=True,
+        language="en",
     )
-
-    # Measure the end time
-    end_time_transcription = time.time()
-    duration = end_time_transcription - start_time
-
-    print(f"##########\nDetected language '{info.language}' with probability {info.language_probability:.2f}\n##########")
-    print(f"##########\nTranscription completed in {duration:.2f} seconds\n##########")
+    if batch_size > 0:
+        batched = BatchedInferencePipeline(model=model)
+        transcribe_kwargs['batch_size'] = batch_size
+        print(f"##########\nUsing batched inference (batch_size={batch_size})\n##########")
+        segments, info = batched.transcribe(audio_file, **transcribe_kwargs)
+    else:
+        segments, info = model.transcribe(audio_file, **transcribe_kwargs)
 
     # Compile profanity patterns for matching
     compiled_patterns = [re.compile(p, re.IGNORECASE) for p in PROFANITY_PATTERNS]
@@ -893,6 +896,10 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False,
                         whisper_swear_list.append((word.word, word.start, end_time))
                         print(f"  Whisper found: '{mask_for_log(word.word)}' at {word.start:.2f}s - {end_time:.2f}s")
                         break
+
+    transcription_duration = time.time() - start_time
+    print(f"##########\nDetected language '{info.language}' with probability {info.language_probability:.2f}\n##########")
+    print(f"##########\nTranscription completed in {transcription_duration:.2f} seconds\n##########")
 
     # Write transcription to a text file for troubleshooting if requested
     if output_transcription:
@@ -953,6 +960,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False,
                                 beam_size=5,
                                 word_timestamps=True,
                                 vad_filter=False,
+                                language="en",
                                 clip_timestamps=[window_start, window_end]
                             )
 
@@ -1017,9 +1025,6 @@ def mute_audio(audio_only_file, swears):
         f"volume=enable='between(t,{expr['start']},{expr['end']}):volume=0'"
         for expr in filter_expressions
     )
-    print("##########\nMuting all F-words...\n##########")
-    print(f"Filter String: {filter_string}")
-
     out_codec, extra_args, defused_ext = get_ac3_or_copy(audio_only_file)
     base_name, _ = os.path.splitext(audio_only_file)
     defused_audio_file = f"{base_name}-DEFUSED-AUDIO{defused_ext}"
@@ -1033,7 +1038,9 @@ def mute_audio(audio_only_file, swears):
         *extra_args,
         defused_audio_file
     ]
-    subprocess.run(cmd, text=True)
+    result = subprocess.run(cmd, text=True, capture_output=True)
+    if result.returncode != 0:
+        print(f"Error muting audio: {result.stderr.strip()}")
     return defused_audio_file
 
 ###############################################################################
@@ -1121,6 +1128,8 @@ def main():
                         help='Disable ffsubsync subtitle sync verification')
     parser.add_argument('--model', type=str, default=None,
                         help=f'Whisper model to use (default: {DEFAULT_MODEL})')
+    parser.add_argument('--batch-size', type=int, default=8,
+                        help='Batch size for parallel GPU inference (0 to disable, default: 8)')
     args = parser.parse_args()
 
     video_files = args.input
@@ -1183,7 +1192,7 @@ def main():
         wav = extract_for_transcription(video_file, audio_index, duration)
 
         # Transcribe audio with optional subtitle enhancement
-        swears = transcribe_audio(wav, subtitle_file=enhance_subtitle_file, output_transcription=output_transcription, model_name=args.model)
+        swears = transcribe_audio(wav, subtitle_file=enhance_subtitle_file, output_transcription=output_transcription, model_name=args.model, batch_size=args.batch_size)
 
         # Remove the wav file as we don't need it anymore
         os.remove(wav)
@@ -1202,6 +1211,7 @@ def main():
 
         cmd = [
             'ffmpeg',
+            '-loglevel', 'warning', '-stats',
             '-i', video_file,
             '-i', defused_audio_file,
             '-c:v', 'copy',

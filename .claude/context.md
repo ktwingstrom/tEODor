@@ -9,9 +9,24 @@ tEODor is a tool for muting profanity (F-bombs, etc.) in video and audio content
 - Connection: Gigabit fiber
 
 ## Current Branch
-`feature/subtitle-enhanced-detection` - Contains GPU support and subtitle-enhanced detection
+`main` - All features merged
 
-## Latest Updates (2026-02-03)
+## Latest Updates (2026-02-13)
+
+### v1.0.1 - Fix ffsubsync detection in pipx installs
+
+When installed globally via `pipx install git+https://github.com/ktwingstrom/tEODor.git`, ffsubsync was not detected because it lives inside pipx's isolated venv and isn't on the system PATH.
+
+**Fix:** Added `_find_ffsubsync()` helper that checks the running Python's bin directory first (finding it inside the pipx venv), then falls back to system PATH lookup. Also cleaned up redundant inline imports (`re`, `shutil`).
+
+**Files changed:** `teodor/defuse.py`, `pyproject.toml`
+**Tag:** `v1.0.1` pushed to GitHub
+
+**To update:** `pipx upgrade teodor`
+
+---
+
+## Previous Updates (2026-02-03)
 
 ### Subtitle Masking Integrated into Pipeline
 
