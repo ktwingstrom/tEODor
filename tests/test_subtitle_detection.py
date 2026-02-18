@@ -18,6 +18,7 @@ from teodor.defuse import (
     parse_srt_for_profanity,
     merge_profanity_results,
     check_subtitles_for_profanity,
+    word_to_pattern,
     PROFANITY_PATTERNS
 )
 import re
@@ -307,6 +308,50 @@ class TestCheckSubtitlesForProfanity(unittest.TestCase):
 
         self.assertFalse(has_profanity)
         self.assertEqual(result_path, srt_file)
+
+
+class TestWordToPattern(unittest.TestCase):
+    """Test the word_to_pattern() helper."""
+
+    def test_basic_word(self):
+        """Test simple word produces correct pattern."""
+        pattern = word_to_pattern('shit')
+        self.assertEqual(pattern, r'\w*s+h+i+t+\w*')
+
+    def test_dedup_repeated_letters(self):
+        """Test that consecutive repeated letters are deduplicated."""
+        pattern = word_to_pattern('goddamn')
+        self.assertEqual(pattern, r'\w*g+o+d+a+m+n+\w*')
+        # "godamn" should produce the same pattern
+        self.assertEqual(word_to_pattern('godamn'), pattern)
+
+    def test_case_insensitive_input(self):
+        """Test that input is lowercased."""
+        self.assertEqual(word_to_pattern('DAMN'), word_to_pattern('damn'))
+
+    def test_pattern_matches_compound_words(self):
+        """Test that generated pattern matches compound words."""
+        pattern = re.compile(word_to_pattern('shit'), re.IGNORECASE)
+        self.assertIsNotNone(pattern.search('bullshit'))
+        self.assertIsNotNone(pattern.search('shitty'))
+        self.assertIsNotNone(pattern.search('horseshit'))
+        self.assertIsNotNone(pattern.search('SHIT'))
+
+    def test_pattern_does_not_false_positive(self):
+        """Test that pattern doesn't match unrelated words."""
+        pattern = re.compile(word_to_pattern('damn'), re.IGNORECASE)
+        self.assertIsNone(pattern.search('dance'))
+        self.assertIsNone(pattern.search('dam'))
+
+    def test_goddamn_does_not_match_damn_alone(self):
+        """Test that goddamn pattern requires the 'god' prefix chars."""
+        pattern = re.compile(word_to_pattern('goddamn'), re.IGNORECASE)
+        # Should match goddamn and variants
+        self.assertIsNotNone(pattern.search('goddamn'))
+        self.assertIsNotNone(pattern.search('goddamnit'))
+        self.assertIsNotNone(pattern.search('godamn'))
+        # Should NOT match 'damn' alone (missing g, o)
+        self.assertIsNone(pattern.search('damn'))
 
 
 if __name__ == '__main__':

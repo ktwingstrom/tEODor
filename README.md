@@ -71,6 +71,7 @@ Creates a `-CLEAN` version of each file with the muted audio added as a second a
 | `--preserve-original` | Keep the original file (default: delete after creating clean version) |
 | `--output-transcription` | Save transcription to a text file for debugging |
 | `--model MODEL` | Whisper model to use (default: `nyrahealth/faster_CrisperWhisper`) |
+| `--swears WORD ...` | Additional profanity words to mute (e.g. `--swears shit damn`) |
 
 ### `defuse-audio` -- Mute profanity in audio files
 
@@ -85,6 +86,7 @@ Creates a `-CLEAN` version of the audio file.
 | Flag | Description |
 |------|-------------|
 | `-i`, `--input` | Input audio file (required) |
+| `--swears WORD ...` | Additional profanity words to mute (e.g. `--swears damn crap`) |
 
 Supports long files (audiobooks, podcasts) with automatic chunking for files over 2 hours.
 
@@ -105,6 +107,7 @@ Replaces profanity with asterisks (e.g., "fucking" becomes "****ing") while pres
 | `-i`, `--input` | Input subtitle file (required) |
 | `-o`, `--output` | Output file (default: `input-CLEAN.srt`) |
 | `--in-place` | Modify the file in place (creates `.bak` backup) |
+| `--swears WORD ...` | Additional profanity words to mask (e.g. `--swears shit damn`) |
 
 ## Batch Processing
 

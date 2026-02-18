@@ -19,6 +19,22 @@ PROFANITY_PATTERNS = [
     r'\w*s+h+i+t+\w*',     # shit and variations (bullshit, shitty, etc.)
 ]
 
+
+def word_to_pattern(word):
+    """Convert a plain word to a flexible profanity regex pattern.
+
+    Deduplicates consecutive repeated letters so that e.g. "goddamn" and
+    "godamn" produce the same pattern.  Each unique letter becomes ``<letter>+``
+    so one or more repetitions are matched, and the whole thing is wrapped in
+    ``\\w*…\\w*`` to catch compound words (e.g. "bullshit", "goddamnit").
+    """
+    chars = []
+    for c in word.lower():
+        if not chars or c != chars[-1]:
+            chars.append(c)
+    core = ''.join(f'{c}+' for c in chars)
+    return rf'\w*{core}\w*'
+
 ###############################################################################
 #                              AUDIO CHUNKING                                 #
 ###############################################################################
@@ -198,16 +214,18 @@ def get_audio_info(audio_file):
         return 'mp3', '128000'
 
 # Function to transcribe a single audio chunk
-def transcribe_chunk(model, chunk_file, time_offset=0.0):
+def transcribe_chunk(model, chunk_file, time_offset=0.0, patterns=None):
     """
     Transcribe a single audio chunk and return swear words with adjusted timestamps.
     """
+    if patterns is None:
+        patterns = PROFANITY_PATTERNS
     swear_list = []
     transcribed_text_parts = []
     segments_data = []
 
     # Compile profanity patterns
-    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in PROFANITY_PATTERNS]
+    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in patterns]
 
     # Transcribe the chunk
     segments, info = model.transcribe(
@@ -255,7 +273,9 @@ def transcribe_chunk(model, chunk_file, time_offset=0.0):
 
 
 # Function to transcribe audio to text using faster-whisper
-def transcribe_audio(mp3_audio_file):
+def transcribe_audio(mp3_audio_file, patterns=None):
+    if patterns is None:
+        patterns = PROFANITY_PATTERNS
     print("##########\nTranscribing audio into text to find F-words...\n##########")
 
     # Measure the start time
@@ -292,7 +312,7 @@ def transcribe_audio(mp3_audio_file):
         else:
             print("##########\nTranscribing audio...\n##########")
 
-        swears, text_parts, segments_data, info = transcribe_chunk(model, chunk_file, time_offset)
+        swears, text_parts, segments_data, info = transcribe_chunk(model, chunk_file, time_offset, patterns=patterns)
 
         all_swears.extend(swears)
         all_text_parts.extend(text_parts)
@@ -421,6 +441,8 @@ def main():
     # Get user input for the video file
     parser = argparse.ArgumentParser(description='Process audio file and mute profanity.')
     parser.add_argument('-i', '--input', help='Input audio file', required=True)
+    parser.add_argument('--swears', nargs='*', default=[],
+                        help='Additional profanity words to mute (e.g. --swears damn crap)')
     args = parser.parse_args()
 
     audio_file = args.input
@@ -450,9 +472,11 @@ def main():
     # Run a probe command on the video file to get all the codec and bitrate info we need first:
     audio_codec, bit_rate = get_audio_info(audio_file)
 
+    patterns = PROFANITY_PATTERNS + [word_to_pattern(w) for w in args.swears]
+
     try:
         # Transcribe audio to text and obtain timestamps
-        swears = transcribe_audio(audio_file)
+        swears = transcribe_audio(audio_file, patterns=patterns)
 
         # Check if no profanity was found
         if not swears:

@@ -196,10 +196,26 @@ def get_ac3_or_copy(audio_file: str):
 # Profanity patterns to detect (can be extended)
 # These patterns match both standalone words and compound words
 PROFANITY_PATTERNS = [
-    r'\w*f+u+c+k+\w*'     
+    r'\w*f+u+c+k+\w*'
     #r'\w*n+i+g+g+e+r+\w*',
     #r'\w*s+h+i+t+\w*',
 ]
+
+
+def word_to_pattern(word):
+    """Convert a plain word to a flexible profanity regex pattern.
+
+    Deduplicates consecutive repeated letters so that e.g. "goddamn" and
+    "godamn" produce the same pattern.  Each unique letter becomes ``<letter>+``
+    so one or more repetitions are matched, and the whole thing is wrapped in
+    ``\\w*…\\w*`` to catch compound words (e.g. "bullshit", "goddamnit").
+    """
+    chars = []
+    for c in word.lower():
+        if not chars or c != chars[-1]:
+            chars.append(c)
+    core = ''.join(f'{c}+' for c in chars)
+    return rf'\w*{core}\w*'
 
 def find_english_subtitle_stream(video_file):
     """
@@ -318,13 +334,15 @@ def get_subtitle_file_path(video_file, subtitles_exist, external_srt_exists):
     return None
 
 
-def parse_srt_for_profanity(subtitle_file):
+def parse_srt_for_profanity(subtitle_file, patterns=None):
     """
     Parse an SRT file and extract timing information for profanity.
 
     Returns a list of tuples: (word, start_time, end_time, subtitle_text)
     where times are in seconds.
     """
+    if patterns is None:
+        patterns = PROFANITY_PATTERNS
     print("##########\nParsing subtitles for profanity...\n##########")
 
     if not os.path.exists(subtitle_file):
@@ -342,7 +360,7 @@ def parse_srt_for_profanity(subtitle_file):
             return []
 
     profanity_instances = []
-    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in PROFANITY_PATTERNS]
+    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in patterns]
 
     for sub in subs:
         text = sub.text.replace('\n', ' ')
@@ -377,11 +395,13 @@ def parse_srt_for_profanity(subtitle_file):
     return profanity_instances
 
 
-def check_subtitles_for_profanity(video_file, subtitles_exist, external_srt_exists):
+def check_subtitles_for_profanity(video_file, subtitles_exist, external_srt_exists, patterns=None):
     """
     Quick check if subtitles contain any profanity.
     Returns (has_profanity, subtitle_file_path)
     """
+    if patterns is None:
+        patterns = PROFANITY_PATTERNS
     subtitle_file = get_subtitle_file_path(video_file, subtitles_exist, external_srt_exists)
 
     if not subtitle_file:
@@ -395,7 +415,7 @@ def check_subtitles_for_profanity(video_file, subtitles_exist, external_srt_exis
             content = file.read()
 
     # Quick check for any profanity
-    for pattern in PROFANITY_PATTERNS:
+    for pattern in patterns:
         if re.search(pattern, content, re.IGNORECASE):
             print(f"##########\nProfanity found in subtitles.\n##########")
             return True, subtitle_file
@@ -587,7 +607,7 @@ def check_subtitle_sync(audio_file, subtitle_file, threshold=0.5):
     return subtitle_file
 
 
-def subtitle_guided_transcription(audio_file, subtitle_file, model, output_transcription=False):
+def subtitle_guided_transcription(audio_file, subtitle_file, model, output_transcription=False, patterns=None):
     """
     Perform targeted transcription on specific audio segments where subtitles
     indicate profanity exists but Whisper's full transcription may have missed it.
@@ -600,21 +620,24 @@ def subtitle_guided_transcription(audio_file, subtitle_file, model, output_trans
         subtitle_file: Path to the SRT file
         model: Loaded Whisper model
         output_transcription: Whether to save transcription to file
+        patterns: List of profanity regex patterns (default: PROFANITY_PATTERNS)
 
     Returns:
         List of (word, start, end) tuples for detected profanity
     """
+    if patterns is None:
+        patterns = PROFANITY_PATTERNS
     print("##########\nPerforming subtitle-guided transcription analysis...\n##########")
 
     # Get subtitle profanity windows
-    subtitle_profanity = parse_srt_for_profanity(subtitle_file)
+    subtitle_profanity = parse_srt_for_profanity(subtitle_file, patterns=patterns)
 
     if not subtitle_profanity:
         print("##########\nNo profanity in subtitles to guide transcription.\n##########")
         return []
 
     refined_swears = []
-    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in PROFANITY_PATTERNS]
+    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in patterns]
 
     # For each subtitle window with profanity, do targeted transcription
     for sub_item in subtitle_profanity:
@@ -832,7 +855,7 @@ def load_whisper_model(model_name=None):
     return model, device
 
 
-def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False, model_name=None, batch_size=8):
+def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False, model_name=None, batch_size=8, patterns=None):
     """
     Transcribe audio to find profanity with word-level timestamps.
 
@@ -846,10 +869,13 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False,
         subtitle_file: Optional path to SRT subtitle file
         output_transcription: Whether to save full transcription to file
         batch_size: Number of segments to process in parallel (0 to disable)
+        patterns: List of profanity regex patterns (default: PROFANITY_PATTERNS)
 
     Returns:
         List of tuples (word, start_time, end_time) for each profanity found
     """
+    if patterns is None:
+        patterns = PROFANITY_PATTERNS
     print("##########\nTranscribing audio into text to find profanity...\n##########")
 
     # Load the model
@@ -874,7 +900,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False,
         segments, info = model.transcribe(audio_file, **transcribe_kwargs)
 
     # Compile profanity patterns for matching
-    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in PROFANITY_PATTERNS]
+    compiled_patterns = [re.compile(p, re.IGNORECASE) for p in patterns]
 
     # Instantiate empty lists
     whisper_swear_list = []
@@ -924,7 +950,7 @@ def transcribe_audio(audio_file, subtitle_file=None, output_transcription=False,
         print("##########\nEnhancing detection with subtitle data...\n##########")
 
         # Parse subtitles for profanity
-        subtitle_swears = parse_srt_for_profanity(subtitle_file)
+        subtitle_swears = parse_srt_for_profanity(subtitle_file, patterns=patterns)
 
         if subtitle_swears:
             # Merge whisper results with subtitle hints
@@ -1055,15 +1081,18 @@ def mute_audio(audio_only_file, swears):
 ###############################################################################
 #                           MASK SUBTITLES                                    #
 ###############################################################################
-def mask_subtitle_file(input_subtitle_file, output_subtitle_file):
+def mask_subtitle_file(input_subtitle_file, output_subtitle_file, patterns=None):
     """
     Mask profanity in a subtitle file by replacing matches with asterisks.
     Returns the number of replacements made.
     """
+    if patterns is None:
+        patterns = PROFANITY_PATTERNS
     print(f"##########\nMasking profanity in subtitle file: {input_subtitle_file}\n##########")
 
-    # Pattern to match fuck and variations
-    profanity_pattern = re.compile(r'(f+u+c+k+)', re.IGNORECASE)
+    # Build combined pattern from all profanity patterns
+    combined = '|'.join(f'({p})' for p in patterns)
+    profanity_pattern = re.compile(combined, re.IGNORECASE)
 
     # Try different encodings
     encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']
@@ -1139,7 +1168,11 @@ def main():
                         help=f'Whisper model to use (default: {DEFAULT_MODEL})')
     parser.add_argument('--batch-size', type=int, default=6,
                         help='Batch size for parallel GPU inference (0 to disable, default: 6)')
+    parser.add_argument('--swears', nargs='*', default=[],
+                        help='Additional profanity words to mute (e.g. --swears shit damn)')
     args = parser.parse_args()
+
+    patterns = PROFANITY_PATTERNS + [word_to_pattern(w) for w in args.swears]
 
     video_files = args.input
     ignore_subtitles = args.ignore_subtitles
@@ -1172,7 +1205,7 @@ def main():
         subtitle_file = None
         if not ignore_subtitles and (subtitles_exist or external_srt_exists):
             has_profanity, subtitle_file = check_subtitles_for_profanity(
-                video_file, subtitles_exist, external_srt_exists
+                video_file, subtitles_exist, external_srt_exists, patterns=patterns
             )
 
             if subtitle_only and not has_profanity:
@@ -1201,7 +1234,7 @@ def main():
         wav = extract_for_transcription(video_file, audio_index, duration)
 
         # Transcribe audio with optional subtitle enhancement
-        swears = transcribe_audio(wav, subtitle_file=enhance_subtitle_file, output_transcription=output_transcription, model_name=args.model, batch_size=args.batch_size)
+        swears = transcribe_audio(wav, subtitle_file=enhance_subtitle_file, output_transcription=output_transcription, model_name=args.model, batch_size=args.batch_size, patterns=patterns)
 
         # Remove the wav file as we don't need it anymore
         os.remove(wav)
@@ -1239,7 +1272,7 @@ def main():
             # Mask subtitles if available
             if subtitle_file and os.path.exists(subtitle_file):
                 clean_subtitle_file = os.path.join(directory, f"{base_name}-CLEAN.srt")
-                mask_subtitle_file(subtitle_file, clean_subtitle_file)
+                mask_subtitle_file(subtitle_file, clean_subtitle_file, patterns=patterns)
 
             # Check if we need to clean up extracted subtitle file
             extracted_subtitle_file = os.path.join(directory, f"{base_name}_subtitles.srt")
