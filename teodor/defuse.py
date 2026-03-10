@@ -12,6 +12,8 @@ from faster_whisper import WhisperModel, BatchedInferencePipeline
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 # Map out common extensions to their codec. Used in multiple functions
+VIDEO_EXTENSIONS = {'.mkv', '.mp4', '.avi', '.m4v', '.mov', '.wmv', '.flv', '.webm', '.ts', '.mpg', '.mpeg'}
+
 AUDIO_EXTENSION_MAP = {
     'aac':        'aac',
     'ac3':        'ac3',
@@ -1151,7 +1153,7 @@ def remove_int_files(*file_paths):
 ###############################################################################
 def main():
     parser = argparse.ArgumentParser(description='Process video files and mute profanity.')
-    parser.add_argument('-i', '--input', nargs='+', help='Input video files', required=True)
+    parser.add_argument('-i', '--input', nargs='+', help='Input video files or directories containing video files', required=True)
     parser.add_argument('--ignore-subtitles', action='store_true',
                         help='Ignore subtitles entirely (do not use for detection or pre-check)')
     parser.add_argument('--subtitle-only', action='store_true',
@@ -1174,7 +1176,23 @@ def main():
 
     patterns = PROFANITY_PATTERNS + [word_to_pattern(w) for w in args.swears]
 
-    video_files = args.input
+    # Expand directories into video files
+    video_files = []
+    for item in args.input:
+        item = os.path.abspath(item)
+        if os.path.isdir(item):
+            found = sorted(
+                f for f in os.listdir(item)
+                if os.path.splitext(f)[1].lower() in VIDEO_EXTENSIONS
+                and '-CLEAN' not in f
+            )
+            if not found:
+                print(f"##########\nNo video files found in directory: {item}\n##########")
+            for f in found:
+                video_files.append(os.path.join(item, f))
+        else:
+            video_files.append(item)
+
     ignore_subtitles = args.ignore_subtitles
     subtitle_only = args.subtitle_only
     output_transcription = args.output_transcription
