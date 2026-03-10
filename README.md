@@ -55,6 +55,7 @@ pip install git+https://github.com/ktwingstrom/tEODor.git
 ```bash
 defuse -i movie.mkv
 defuse -i episode1.mkv episode2.mkv episode3.mkv
+defuse -i Season*/
 ```
 
 Creates a `-CLEAN` version of each file with the muted audio added as a second audio track.
@@ -63,14 +64,14 @@ Creates a `-CLEAN` version of each file with the muted audio added as a second a
 
 | Flag | Description |
 |------|-------------|
-| `-i`, `--input` | Input video file(s) (required) |
+| `-i`, `--input` | Input video files or directories (required) |
 | `--ignore-subtitles` | Skip subtitle detection entirely |
 | `--subtitle-only` | Only process files that have profanity in subtitles |
 | `--no-subtitle-enhance` | Disable subtitle-enhanced detection (Whisper only) |
 | `--no-sync-check` | Disable ffsubsync subtitle sync verification |
 | `--preserve-original` | Keep the original file (default: delete after creating clean version) |
 | `--output-transcription` | Save transcription to a text file for debugging |
-| `--model MODEL` | Whisper model to use (default: `nyrahealth/faster_CrisperWhisper`) |
+| `--model MODEL` | Whisper model to use (default: `large-v3`) |
 | `--swears WORD ...` | Additional profanity words to mute (e.g. `--swears shit damn`) |
 
 ### `defuse-audio` -- Mute profanity in audio files
@@ -111,17 +112,17 @@ Replaces profanity with asterisks (e.g., "fucking" becomes "****ing") while pres
 
 ## Batch Processing
 
-Process an entire directory of video files:
+Pass directories directly -- tEODor will find all video files inside (`.mkv`, `.mp4`, `.avi`, `.m4v`, `.mov`, `.wmv`, `.flv`, `.webm`, `.ts`, `.mpg`, `.mpeg`):
 
 ```bash
+# Process all seasons of a show
+defuse -i Season*/
+
+# Mix directories and individual files
+defuse -i Season01/ Season02/ bonus.mkv
+
+# Or expand files with a shell glob
 defuse -i /path/to/shows/Season01/*
-```
-
-Or use the included shell scripts for recursive directory processing:
-
-```bash
-./defuse-all.sh -i /path/to/shows/
-./defuse-all-audio.sh -i /path/to/audiobooks/
 ```
 
 ## System Requirements
