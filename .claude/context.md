@@ -11,42 +11,51 @@ tEODor is a tool for muting profanity (F-bombs, etc.) in video and audio content
 ## Current Branch
 `main` - All features merged
 
-## Latest Updates (2026-02-13)
+## Latest Updates (2026-03-10)
+
+### v1.3.0 - Directory input support for batch processing
+
+- `defuse -i` now accepts directories in addition to individual files (e.g. `defuse -i Season*/`)
+- Directories are expanded to all video files inside them, sorted alphabetically
+- Supported extensions: `.mkv`, `.mp4`, `.avi`, `.m4v`, `.mov`, `.wmv`, `.flv`, `.webm`, `.ts`, `.mpg`, `.mpeg`
+- Already-defused (`-CLEAN`) files are automatically skipped
+- `VIDEO_EXTENSIONS` constant added to `defuse.py`
+- Version bumped to 1.3.0
+
+### Previous: v1.2.0 - Custom profanity words via --swears flag
+
+- Added `--swears word1 word2 ...` flag to all three commands (`defuse`, `defuse-audio`, `mask-subtitles`)
+- Users can now mute additional words beyond the hardcoded f-word
+- `word_to_pattern()` helper converts plain words to flexible regex patterns with letter dedup (e.g. "goddamn"/"godamn" produce the same pattern, catches compound forms like "goddamnit")
+- Patterns threaded through all detection/masking functions via `patterns=None` parameter
+- 6 new unit tests for `word_to_pattern()` (19 total)
+- Version bumped to 1.2.0
+
+### Previous: v1.1.3 - Fix setuptools and clarify output
+
+- Pin `setuptools>=68.0,<76` — versions 76+ removed `pkg_resources` as a top-level module, breaking `webrtcvad`/ffsubsync on Python 3.13. Now installed correctly via `pipx install --force`.
+- Changed misleading "using subtitle timing" messages to "using estimated word timing from subtitles" to clarify that character interpolation narrows the mute window to the word position, not the whole subtitle line.
+
+### v1.1.2 - Fix GPU OOM and transcription output
+
+- Lowered default `--batch-size` from 8 to 6 (Tesla P4 OOM'd with 8 on `large-v3`)
+- Transcription file (`--output-transcription`) now writes progressively during segment processing instead of after completion — partial output saved even on crash
+
+### v1.1.1 - Fix model compatibility and Python 3.13 support
+
+- **Switched default model from CrisperWhisper to `large-v3`**: `BatchedInferencePipeline` produces broken word-level timestamps with CrisperWhisper (garbled tokens, 3/29 detected on Zombieland). `large-v3` works correctly (24/29 detected). CrisperWhisper still usable via `--model nyrahealth/faster_CrisperWhisper --batch-size 0`.
+- Added `setuptools` to dependencies for `pkg_resources` (Python 3.13)
 
 ### v1.1.0 - Batched GPU inference and cleaner output
 
-Added `BatchedInferencePipeline` from faster-whisper to process multiple audio segments in parallel on the GPU, giving ~3-4x transcription speedup. Previously sequential processing was not fully utilizing GPU bandwidth — a full movie took ~1 hour for transcription, now expected ~15-20 minutes.
-
-**Changes:**
-- Wrap `WhisperModel` in `BatchedInferencePipeline` for parallel segment processing
-- New `--batch-size` CLI flag (default 8, use 0 to fall back to sequential)
-- Fixed misleading transcription timing — was only measuring model load, now measures actual transcription
-- Added `language="en"` to all transcribe calls (skips language detection)
-- Suppressed verbose ffmpeg output from extract/mute steps (capture_output)
-- Removed giant filter string dump from mute_audio
-- Final remux uses `-loglevel warning -stats` to show only progress line
-- Bumped `faster-whisper` dependency to `>=1.1.0`
-
-**Files changed:** `teodor/defuse.py`, `pyproject.toml`
-**Tag:** `v1.1.0` pushed to GitHub
-
-**To update:** `pipx upgrade teodor`
-
-**Notes:**
-- Tesla P4 (8GB): start with `--batch-size 8`, try `--batch-size 4` if OOM
-- Batched mode processes segments independently (no context passing), WER may be very slightly higher
-- Re-analysis of subtitle-missed clips still uses raw model (clip_timestamps not compatible with batched)
-
----
+- `BatchedInferencePipeline` for parallel segment processing (~5 min transcription for a movie)
+- `--batch-size` CLI flag (default 6, use 0 for sequential)
+- Suppressed verbose ffmpeg output, fixed transcription timing measurement
+- Added `language="en"` to skip language detection
 
 ### v1.0.1 - Fix ffsubsync detection in pipx installs
 
-When installed globally via `pipx install git+https://github.com/ktwingstrom/tEODor.git`, ffsubsync was not detected because it lives inside pipx's isolated venv and isn't on the system PATH.
-
-**Fix:** Added `_find_ffsubsync()` helper that checks the running Python's bin directory first (finding it inside the pipx venv), then falls back to system PATH lookup. Also cleaned up redundant inline imports (`re`, `shutil`).
-
-**Files changed:** `teodor/defuse.py`, `pyproject.toml`
-**Tag:** `v1.0.1` pushed to GitHub
+- `_find_ffsubsync()` helper checks Python's bin directory first (pipx venv), then system PATH
 
 ---
 
@@ -189,34 +198,48 @@ Implemented a multi-pass detection system that uses SRT subtitles as a reference
 - `mask_for_log()` - Mask profanity for log output display
 
 **CLI Options:**
+- `-i` / `--input` - Input video files or directories containing video files
 - `--subtitle-only` - Only process files that have subtitles with profanity
 - `--no-subtitle-enhance` - Disable subtitle enhancement (Whisper only)
 - `--ignore-subtitles` - Ignore subtitles entirely
 - `--output-transcription` - Save transcription to file for debugging
 - `--preserve-original` - Keep original file after creating clean version
-- `--batch-size N` - Batch size for parallel GPU inference (default 8, 0 to disable)
+- `--batch-size N` - Batch size for parallel GPU inference (default 6, 0 to disable)
 - `--no-sync-check` - Disable ffsubsync subtitle sync verification
-- `--model NAME` - Whisper model to use (default: nyrahealth/faster_CrisperWhisper)
+- `--model NAME` - Whisper model to use (default: large-v3)
+- `--swears WORD ...` - Additional profanity words to mute (builds flexible regex patterns)
 
 **Profanity Patterns:**
-- Catches compound words (motherfucker, bullshit, etc.)
-- Patterns: fuck*, *fucker, shit*, *shit, n-word variants
+- Hardcoded: f-word (always active)
+- User-extensible via `--swears`: `word_to_pattern()` builds `\w*<letter>+...\w*` regexes
+- Catches compound words (motherfucker, bullshit, goddamnit, etc.)
 
 ## Files Overview
 
 - `defuse.py` - Main script for video files (GPU-accelerated)
 - `defuse-audio-only.py` - Audio-only processing (GPU-accelerated)
 - `mask-subtitles.py` - Standalone subtitle profanity masking (no video/audio processing)
-- `test_subtitle_detection.py` - Unit tests (11 tests)
+- `test_subtitle_detection.py` - Unit tests (19 tests)
 - `requirements.txt` - Dependencies
 
 ## Dependencies
 - faster-whisper>=1.1.0 (uses CTranslate2 for GPU, BatchedInferencePipeline)
 - pysrt>=1.1.2
 - ffmpeg-python>=0.2.0
+- ffsubsync>=0.4.0
+- setuptools>=68.0,<76 (provides pkg_resources for webrtcvad on Python 3.13+)
 
 ## Important Notes
 - FFmpeg must be installed separately on system
 - Script automatically detects CUDA and switches between CPU/GPU
 - Video streams are copied (not re-encoded), only audio is processed
 - Tesla P4 uses int8 compute (not float16) due to Pascal architecture limitations
+- **Install/upgrade:** `pipx install --force git+https://github.com/ktwingstrom/tEODor.git` (use `--force` to ensure dependency pins are applied)
+- CrisperWhisper model does NOT work with BatchedInferencePipeline (broken word timestamps); use `large-v3` (default) or run CrisperWhisper with `--batch-size 0`
+
+## Zombieland Test Results (2026-02-14)
+- Model: large-v3, batch_size=6, Tesla P4 int8
+- Transcription: ~5 min (309s)
+- Whisper detected: 24/29, Subtitle fallbacks: 6, Refined: 3/6
+- Total muted: 30
+- Subtitle character interpolation correctly narrows mute windows to estimated word position
